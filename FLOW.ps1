@@ -343,8 +343,16 @@ function Profile-Accounts($p) {
     @($map.Values)
 }
 
-function Connect-Account($a) {
+function Dup-Of($a) {
+    # un autre compte connecté avec la même adresse que $a (deux « comptes » qui sont en fait le même) ; $null sinon
+    $m = Acct-Mail $a
+    if (-not $m) { return $null }
+    @($Accounts | Where-Object { $_.Id -ne $a.Id -and $_.Enabled -and $_.Logged -and (Acct-Mail $_) -eq $m })[0]
+}
+
+function Connect-Account($a, [switch]$Relogin) {
     # connexion d'un compte dans CETTE fenêtre (claude auth login) : pas de fenêtre à chercher. Renvoie $true si connecté.
+    # -Relogin : déconnecte d'abord le compte (pour changer d'adresse).
     Disable-Mouse
     [Console]::Write("$R$e[?25h$e[2J$e[H")
     Write-Host ''
@@ -359,6 +367,7 @@ function Connect-Account($a) {
     $old = $env:CLAUDE_CONFIG_DIR
     try {
         if ($a.Dir) { $env:CLAUDE_CONFIG_DIR = $a.Dir } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
+        if ($Relogin) { Start-Process -FilePath (Get-Command claude -ErrorAction Stop).Source -ArgumentList @('auth', 'logout') -NoNewWindow -Wait; Write-FlowLog "compte « $($a.Label) » déconnecté pour changer d'adresse" }
         $largs = @('auth', 'login'); if ($a.Email) { $largs += @('--email', $a.Email) }
         # Start-Process : la sortie va droit à l'écran (un appel direct serait capturé par l'appelant, lien compris)
         Start-Process -FilePath (Get-Command claude -ErrorAction Stop).Source -ArgumentList $largs -NoNewWindow -Wait
@@ -432,7 +441,7 @@ function Invoke-AccountGate($p) {
             param($x)
             if ($x.Go) { return "$Info▶ lancer maintenant$R $Dm(sans $(($missing.Label) -join ', '))$R" }
             if ($x.Add) { return "$Ok＋ ajouter un compte Claude…$R" }
-            $st = if ($x.Logged) { $m = Acct-Mail $x; "$Ok● connecté$R$(if ($m) { " $Dm$m$R" })" } else { "$Warn○ à connecter$R $Dm— Entrée$R" }
+            $st = if ($x.Logged) { $m = Acct-Mail $x; $dp = Dup-Of $x; "$Ok● connecté$R$(if ($m) { " $Dm$m$R" })$(if ($dp) { "  $Warn$B⚠ même adresse que $($dp.Label) — Entrée pour reconnecter$R" })" } else { "$Warn○ à connecter$R $Dm— Entrée$R" }
             "$(RgbA $x.Rgb)◆ $($x.Label)$R  $st"
         } {
             param($x)
@@ -448,7 +457,7 @@ function Invoke-AccountGate($p) {
         $x = $items[$i]
         if ($x.Go) { return @{ Go = $true; Shown = $true } }
         if ($x.Add) { $x = Add-Account; if (-not $x) { continue } }
-        [void](Connect-Account $x)
+        [void](Connect-Account $x -Relogin:([bool]($x.Logged -and $x.Dir -and (Dup-Of $x))))
     }
 }
 
@@ -1489,8 +1498,8 @@ function Invoke-Accounts($profiles) {
     if ($i -lt 0) { return @{ Msg = '' } }
     $a = $items[$i]
     if ($a.Add) { $a = Add-Account; if (-not $a) { return @{ Msg = "$Dm ajout annulé$R" } } }
-    if (-not $a.Logged) {
-        $logged = Connect-Account $a
+    if (-not $a.Logged -or ($a.Dir -and (Dup-Of $a))) {
+        $logged = Connect-Account $a -Relogin:$a.Logged
         return @{ Msg = $(if ($logged) { "$Ok✓ « $($a.Label) » est connecté$R" } else { "$Warn○ « $($a.Label) » n'est pas encore connecté (C pour réessayer)$R" }) }
     }
     Start-AccountLogin $a
@@ -1690,10 +1699,19 @@ function Draw-Selector($U, $deps) {
     $compact = $H -lt 38
     $dl = ($deps.GetEnumerator() | Sort-Object Name | ForEach-Object {
             if ($_.Value) { "$Ok✓$R $Dm$($_.Name)$R" } else { "$(Rgb 255 90 90)✗ $($_.Name)$R" } }) -join '  '
-    # état des comptes Claude : ● connecté · ○ à connecter (touche C)
-    $al = @($Accounts | Where-Object { $_.Enabled } | ForEach-Object {
-            if ($_.Logged) { "$(RgbA $_.Rgb)●$R $Dm$($_.Label)$R" } else { "$(RgbA $_.Rgb)○$R $Warn$($_.Label) (C)$R" } })
-    if ($al.Count -gt 1 -or @($Accounts | Where-Object { -not $_.Logged }).Count) { $dl += "   $Dm│$R  " + ($al -join '  ') }
+    # comptes Claude : une ligne par compte, en clair (connecté ou non, adresse). Relue de temps en temps : une connexion faite
+    # ailleurs apparaît d'elle-même.
+    if (($U.Tick % 25) -eq 0 -or -not $script:AcctLines) {
+        $script:Accounts = Get-Accounts
+        $script:AcctLines = @($Accounts | Where-Object { $_.Enabled } | ForEach-Object {
+                if ($_.Logged) { $mail = Acct-Mail $_; "   $(RgbA $_.Rgb)●$R $B$($_.Label)$R  $Ok✓ connecté$R$(if ($mail) { "  $Dm$mail$R" })" }
+                else { "   $(RgbA $_.Rgb)○$R $B$($_.Label)$R  $Warn$B✗ PAS CONNECTÉ$R  $Dm— touche C pour le connecter$R" } })
+        $dups = @($Accounts | Where-Object { $_.Enabled -and $_.Logged -and (Dup-Of $_) })
+        if ($dups.Count) {
+            $script:AcctLines += "   $Warn$B⚠ « $($dups[0].Label) » et « $((Dup-Of $dups[0]).Label) » sont connectés avec la MÊME adresse : cela ne fait qu'un seul compte.$R"
+            $script:AcctLines += "   $Dm  Touche C, puis Entrée sur « $($dups[-1].Label) » : il se reconnecte (fenêtre privée du navigateur pour l'autre adresse).$R"
+        }
+    }
     # projet courant (touche J)
     $pj = if ($ProjectDir) { "$B$(PalC ($ph + 0.2))▣ $(Split-Path $ProjectDir -Leaf)$R" } else { "$Dm◇ sans projet$R" }
     $dl = "$pj $Dm(J)$R   $Dm│$R  " + $dl
@@ -1702,6 +1720,7 @@ function Draw-Selector($U, $deps) {
     if ($compact) {
         $L.Add('')
         $L.Add("   $B$(Grad '◆ F L O W' $ph 0.04)$R  $Dm sélecteur de profils$R   $dl")
+        foreach ($x in $script:AcctLines) { $L.Add($x) }
     } else {
         $L.Add('')
         for ($li = 0; $li -lt $Logo.Count; $li++) { $L.Add('   ' + (Grad $Logo[$li] ($ph + $li * 0.035) 0.012)) }
@@ -1709,6 +1728,7 @@ function Draw-Selector($U, $deps) {
         $L.Add('   ' + (Grad $wave ($ph + 0.3) 0.015))
         $L.Add("   $Dm sélecteur de profils · Claude × psmux$(if ($FlowVersion) { " · v$FlowVersion" })$R")
         $L.Add("   $dl")
+        foreach ($x in $script:AcctLines) { $L.Add($x) }
     }
 
     # — recherche —
