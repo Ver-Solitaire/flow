@@ -2179,44 +2179,116 @@ function Changed-Files([string]$dir, [string]$base) {
     @(Git-In $dir @('-c', 'core.quotepath=false', 'diff', '--name-only', "$base..HEAD") | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
 }
 
-# visionneuse : lire un fichier produit sans quitter la fenêtre (↑↓ PgUp PgDn, ←→ fichier suivant, O ouvrir dans son application)
+# Rendu Markdown pour le terminal : titres, puces, liens, gras ; les tableaux deviennent des fiches (une par ligne).
+function Md-Inline([string]$s) {
+    $s = [regex]::Replace($s, '\*\*([^*]+)\*\*', "$e[1m`$1$e[22m")
+    $s = [regex]::Replace($s, '`([^`]+)`', "$Teal`$1$R")
+    $s = $s.Replace('**', '')
+    if ($s.Trim() -eq 'n.v.') { $s = "$Dm$s$R" }
+    $s
+}
+function Md-PlainLinks([string]$s) { [regex]::Replace($s, '\[([^\]]+)\]\(([^)]+)\)', '$1') }
+function Md-Cells([string]$row) { @(($row.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() }) }
+function Render-Md([string[]]$raw, [int]$w) {
+    $out = [Collections.Generic.List[string]]::new()
+    $i = 0
+    while ($i -lt $raw.Count) {
+        $ln = "$($raw[$i])"
+        if ($ln -match '^\s*\|') {
+            $tab = @(); while ($i -lt $raw.Count -and "$($raw[$i])" -match '^\s*\|') { $tab += "$($raw[$i])"; $i++ }
+            $head = Md-Cells $tab[0]
+            $rows = @($tab | Select-Object -Skip 1 | Where-Object { $_ -notmatch '^\s*\|[\s:|-]+\|?\s*$' })
+            $skip = if ($head.Count -gt 1 -and $head[0] -match '^(#|n°|N°|no|No)$') { 2 } else { 1 }
+            $lw = [Math]::Min(16, [Math]::Max(4, (@($head | Select-Object -Skip $skip | ForEach-Object { $_.Length }) + 4 | Measure-Object -Maximum).Maximum))
+            foreach ($tr in $rows) {
+                $c = Md-Cells $tr
+                $title = if ($skip -eq 2 -and $c.Count -gt 1) { "$($c[0]). $($c[1])" } else { $c[0] }
+                $out.Add("$B$Teal$(Md-PlainLinks $title)$R")
+                for ($k = $skip; $k -lt $c.Count; $k++) {
+                    $lab = if ($k -lt $head.Count) { $head[$k] } else { '' }
+                    $lab = if ($lab.Length -gt $lw) { $lab.Substring(0, $lw - 1) + '…' } else { $lab.PadRight($lw) }
+                    $vw = [Math]::Max(20, $w - $lw - 5)
+                    $parts = @(Chunks (Md-PlainLinks $c[$k]) $vw)
+                    for ($q = 0; $q -lt $parts.Count; $q++) {
+                        $out.Add("   $Dm$(if ($q -eq 0) { $lab } else { ' ' * $lw })$R  $(Md-Inline $parts[$q])")
+                    }
+                }
+                $out.Add('')
+            }
+            continue
+        }
+        $i++
+        if ($ln -match '^# (.+)') {
+            $out.Add(''); foreach ($x in @(Chunks (Md-PlainLinks $Matches[1]) ($w - 2))) { $out.Add("$B$Teal$x$R") }
+            $out.Add("$Teal$('═' * [Math]::Min($w, 60))$R"); $out.Add('')
+        }
+        elseif ($ln -match '^##+ (.+)') {
+            $out.Add(''); foreach ($x in @(Chunks (Md-PlainLinks $Matches[1]) ($w - 4))) { $out.Add("$B$Warn▍ $x$R") }
+            $out.Add('')
+        }
+        elseif ($ln -match '^\s*[-*] (.+)') {
+            $item = $Matches[1]
+            $url = [regex]::Match($item, '\]\(([^)]+)\)').Groups[1].Value
+            $parts = @(Chunks (Md-PlainLinks $item) ($w - 4))
+            for ($q = 0; $q -lt $parts.Count; $q++) { $out.Add("$(if ($q -eq 0) { "$Teal•$R " } else { '  ' }) $(Md-Inline $parts[$q])") }
+            if ($url) { $out.Add("    $Dm$url$R") }
+        }
+        elseif (-not $ln.Trim()) { $out.Add('') }
+        else { foreach ($x in @(Chunks (Md-PlainLinks $ln) $w)) { $out.Add((Md-Inline $x)) } }
+    }
+    $out.ToArray()
+}
+
+# visionneuse : lire un fichier produit sans quitter la fenêtre (molette, ↑↓, PgUp/PgDn, ←→ autre fichier, O ouvrir)
 function Show-Viewer([string]$root, [string[]]$files) {
-    $n = 0; $top = 0; $cache = $null; $binRx = '\.(png|jpe?g|gif|webp|ico|pdf|zip|exe|dll|docx?|xlsx?|pptx?|mp[34]|woff2?)$'
+    $n = 0; $top = 0; $cache = $null; $cacheW = 0; $binRx = '\.(png|jpe?g|gif|webp|ico|pdf|zip|exe|dll|docx?|xlsx?|pptx?|mp[34]|woff2?)$'
     Cls
     while ($true) {
         $f = $files[$n]; $path = Join-Path $root $f
         $W = [Math]::Max(40, (ConW) - 1); $H = ConH
-        if ($null -eq $cache) {
+        $cw = [Math]::Min(100, $W - 10)
+        if ($null -eq $cache -or $cacheW -ne $cw) {
             $raw = if (-not (Test-Path -LiteralPath $path)) { @('(ce fichier est supprimé dans cette version)') }
                    elseif ($f -match $binRx) { @('(fichier non texte : appuie sur O pour l''ouvrir dans son application)') }
-                   else { @(Get-Content -LiteralPath $path -Encoding utf8 -ErrorAction SilentlyContinue) }
-            $cache = @(); foreach ($ln in $raw) { $cache += @(Chunks ("$ln" -replace "`t", '    ') ($W - 6)) }
-            $top = 0
+                   else { @(Get-Content -LiteralPath $path -Encoding utf8 -ErrorAction SilentlyContinue | ForEach-Object { "$_" -replace "`t", '    ' }) }
+            $cache = if ($f -match '\.(md|markdown)$') { @(Render-Md $raw $cw) } else { @($raw | ForEach-Object { Chunks $_ $cw }) }
+            $cacheW = $cw
         }
-        $room = [Math]::Max(3, $H - 9)
-        $top = [Math]::Max(0, [Math]::Min($top, [Math]::Max(0, $cache.Count - $room)))
-        $L = [Collections.Generic.List[string]]::new()
-        $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — résultat' 0.1)   $B$f$R  $Dm($($n + 1)/$($files.Count))$R")
-        $L.Add("  $Dm$path$R")
+        $room = [Math]::Max(3, $H - 7)
+        $max = [Math]::Max(0, $cache.Count - $room)
+        $top = [Math]::Max(0, [Math]::Min($top, $max))
         $bc = Rgb 70 74 96
+        $L = [Collections.Generic.List[string]]::new()
+        $L.Add('')
+        $L.Add("  $(Grad '⚑ RÉSULTAT' 0.1)  $B$f$R$(if ($files.Count -gt 1) { "  $Dm(fichier $($n + 1) sur $($files.Count))$R" })")
         $L.Add("  $bc$('─' * [Math]::Max(10, $W - 4))$R")
-        foreach ($x in @($cache | Select-Object -Skip $top -First $room)) { $L.Add("   $x") }
+        # barre de défilement à droite
+        $thumb = [Math]::Max(1, [int][Math]::Round($room * $room / [Math]::Max($room, $cache.Count)))
+        $thumbAt = if ($max -gt 0) { [int][Math]::Round(($room - $thumb) * $top / $max) } else { 0 }
+        $slice = @($cache | Select-Object -Skip $top -First $room)
+        for ($ri = 0; $ri -lt $room; $ri++) {
+            $txt = if ($ri -lt $slice.Count) { $slice[$ri] } else { '' }
+            $bar = if ($cache.Count -le $room) { ' ' } elseif ($ri -ge $thumbAt -and $ri -lt $thumbAt + $thumb) { "$Teal█$R" } else { "$bc│$R" }
+            $L.Add("    $(Fit $txt ($W - 8))  $bar")
+        }
         $L.Add("  $bc$('─' * [Math]::Max(10, $W - 4))$R")
-        $to = [Math]::Min($cache.Count, $top + $room)
-        $L.Add("  $Dm lignes $([Math]::Min($cache.Count, $top + 1))–$to sur $($cache.Count)$R")
-        $L.Add((Keys @('↑↓', 'lire', 'PgUp/PgDn', 'page', '←→', 'autre fichier', 'O', 'ouvrir dans son application', 'Échap', 'retour')))
+        $pct = if ($max -le 0) { 100 } else { [int][Math]::Round(100 * $top / $max) }
+        $L.Add((Keys @('molette / ↑↓', 'défiler', 'PgUp PgDn', 'page', '←→', 'autre fichier', 'O', 'ouvrir dans son application', 'Échap', 'retour')) + "   $Dm$pct %$R")
         Show-Frame $L
-        $k = Read-KeyOrHint; $ch = "$($k.KeyChar)".ToLower()
+        $a = Read-Action -Wait -Wheel
+        if ($a.Wheel) { $top += $(if ($a.Up) { -3 } else { 3 }); continue }
+        $k = $a.K; if (-not $k) { continue }
+        $ch = "$($k.KeyChar)".ToLower()
         switch ($k.Key) {
             'Escape'     { return }
             'UpArrow'    { $top-- }
             'DownArrow'  { $top++ }
-            'PageUp'     { $top -= $room }
-            'PageDown'   { $top += $room }
+            'PageUp'     { $top -= $room - 1 }
+            'PageDown'   { $top += $room - 1 }
             'Home'       { $top = 0 }
             'End'        { $top = $cache.Count }
-            'RightArrow' { if ($files.Count -gt 1) { $n = ($n + 1) % $files.Count; $cache = $null; Cls } }
-            'LeftArrow'  { if ($files.Count -gt 1) { $n = ($n - 1 + $files.Count) % $files.Count; $cache = $null; Cls } }
+            'RightArrow' { if ($files.Count -gt 1) { $n = ($n + 1) % $files.Count; $cache = $null; $top = 0; Cls } }
+            'LeftArrow'  { if ($files.Count -gt 1) { $n = ($n - 1 + $files.Count) % $files.Count; $cache = $null; $top = 0; Cls } }
             default      { if ($ch -eq 'o' -and (Test-Path -LiteralPath $path)) { try { Start-Process -FilePath $path } catch {} } }
         }
     }

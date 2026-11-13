@@ -167,7 +167,8 @@ function Fake-Key([string]$name) {
     }
 }
 
-function Read-Action([switch]$Wait, [int]$TimeoutMs = 0) {
+function Read-Action([switch]$Wait, [int]$TimeoutMs = 0, [switch]$Wheel) {
+    # -Wheel : la molette est renvoyée aussi (@{ Wheel = $true; Up = $true/$false }), sinon elle est ignorée
     # touche, aide cliquée (convertie en touche) ou clic sur une zone :
     #   @{ K = ConsoleKeyInfo }  ·  @{ Click = <données de la zone>; Double = $true/$false }  ·  $null (rien)
     $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -176,6 +177,7 @@ function Read-Action([switch]$Wait, [int]$TimeoutMs = 0) {
         $ev = Read-Event -Wait:$Wait -TimeoutMs $left
         if (-not $ev) { return $null }
         if ($ev.Kind -eq 'key') { return @{ K = $ev.K } }
+        if ($ev.Kind -eq 'wheel' -and $Wheel) { return @{ Wheel = $true; Up = [bool]$ev.Up } }
         # changement de taille : une « touche vide » que les écrans ignorent, ce qui les fait se redessiner
         if ($ev.Kind -eq 'resize') { return @{ K = [ConsoleKeyInfo]::new([char]0, [ConsoleKey]0, $false, $false, $false); Resize = $true } }
         if ($ev.Kind -eq 'click') {
