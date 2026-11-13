@@ -946,9 +946,6 @@ function Bind-PaneKeys {
     foreach ($d in @(@('Left', 'L'), @('Right', 'R'), @('Up', 'U'), @('Down', 'D'))) {
         & psmux -L $Sock bind-key -n "M-S-$($d[0])" run-shell (& $run "-Move $($d[1])") *> $null
     }
-    # molette : sans raccourci par défaut, elle n'ouvre plus le mode copie de psmux et va au programme qui a demandé la souris (écrans FLOW, Claude Code)
-    & psmux -L $Sock unbind-key -n WheelUpPane *> $null
-    & psmux -L $Sock unbind-key -n WheelDownPane *> $null
     & psmux -L $Sock bind-key -T prefix W run-shell (& $run '-Save') *> $null
     & psmux -L $Sock bind-key -T prefix T run-shell (& $run '-Team') *> $null
     $menu = @('-T', ' Agencer ',

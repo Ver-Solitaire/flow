@@ -2344,7 +2344,33 @@ function Mode-Review {
         $k = (Read-KeyOrHint); $ch = "$($k.KeyChar)".ToLower()
         if ($k.Key -eq 'Escape' -or $ch -eq 'n') { return 'home' }   # retour à l'accueil de l'équipe : nouvelle demande (N) ; celle-ci reste à valider
         elseif ($ch -eq 'v') {
-            if ($changed.Count) { Show-Viewer $iw $changed; Cls } else { $msg = "$Warn aucun fichier produit par cette équipe$R" }
+            if (-not $changed.Count) { $msg = "$Warn aucun fichier produit par cette équipe$R"; continue }
+            # fenêtre de lecture : le texte mis en forme est affiché dans une fenêtre psmux à part, où la molette défile
+            # nativement (la molette n'est pas transmise aux écrans de FLOW) ; on se place en haut du texte
+            $o = [Collections.Generic.List[string]]::new()
+            foreach ($cf in $changed) {
+                $p = Join-Path $iw $cf
+                $o.Add("$B$Warn━━ $cf ━━$R"); $o.Add('')
+                $raw = if ((Test-Path -LiteralPath $p) -and $cf -notmatch '\.(png|jpe?g|gif|webp|ico|pdf|zip|exe|dll|docx?|xlsx?|pptx?)$') { @(Get-Content -LiteralPath $p -Encoding utf8) } else { @('(fichier non texte)') }
+                foreach ($x in $(if ($cf -match '\.(md|markdown)$') { Render-Md $raw 100 } else { $raw })) { $o.Add("  $x") }
+                $o.Add('')
+            }
+            $view = Join-Path $RunDir 'apercu.txt'
+            [IO.File]::WriteAllText($view, ($o -join "`n"), [Text.UTF8Encoding]::new($false))
+            if ($Psmux) {
+                $runner = Join-Path $RunDir 'apercu.ps1'
+                Write-TextAtomic $runner "[Console]::OutputEncoding = [Text.Encoding]::UTF8`nClear-Host`nGet-Content -LiteralPath $(Q $view) -Raw -Encoding utf8 | Write-Host`nWrite-Host ''`nWrite-Host '── fin · molette pour remonter · q puis une touche pour fermer cette fenêtre ──' -ForegroundColor Yellow`n[void][Console]::ReadKey(`$true)`n"
+                & psmux -L $Sock kill-window -t "${Session}:resultat" *> $null
+                & psmux -L $Sock new-window -t $Session -n resultat "pwsh -NoProfile -File `"$runner`"" *> $null
+                Start-Sleep -Milliseconds 700
+                & psmux -L $Sock select-window -t "${Session}:resultat" *> $null
+                & psmux -L $Sock copy-mode -t "${Session}:resultat" *> $null
+                & psmux -L $Sock send-keys -t "${Session}:resultat" -X history-top *> $null
+                $msg = "$Dm fenêtre « resultat » ouverte (molette pour défiler, q puis une touche pour la fermer ; Ctrl+B 1 pour revenir ici)$R"
+            } else { Show-Viewer $iw $changed; Cls }
+        }
+        elseif ($ch -eq 'e') {
+            if ($changed.Count) { Show-Viewer $iw $changed; Cls }
         }
         elseif ($ch -eq 'd') {
             $c = "Set-Location -LiteralPath $(Q $iw); $(Git-Env)git diff $($State.base)..HEAD"
