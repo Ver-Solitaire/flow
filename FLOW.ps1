@@ -133,7 +133,7 @@ function Get-Profiles {
     if (-not (Test-Path -LiteralPath $ProfDir)) { New-Item -ItemType Directory -Force $ProfDir | Out-Null }
     $list = foreach ($f in Get-ChildItem -LiteralPath $ProfDir -Filter *.json -File) {
         $j = $null
-        try { $j = Get-Content -LiteralPath $f.FullName -Raw -Encoding utf8 | ConvertFrom-Json } catch {}
+        try { $j = Get-Content -LiteralPath $f.FullName -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json } catch {}
         if (-not $j) { continue }
         $j | Add-Member -NotePropertyName Id -NotePropertyValue $f.BaseName -Force
         $j | Add-Member -NotePropertyName File -NotePropertyValue $f.FullName -Force
@@ -211,7 +211,7 @@ function New-AcctObj([string]$id, [string]$label, [string]$short, [string]$dirRa
 function Get-Accounts {
     $list = [Collections.Generic.List[object]]::new()
     $j = $null
-    try { $j = Get-Content -LiteralPath $AcctFile -Raw -Encoding utf8 | ConvertFrom-Json } catch {}
+    try { $j = Get-Content -LiteralPath $AcctFile -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json } catch {}
     foreach ($a in @($j.accounts)) {
         if (-not $a.id) { continue }
         $list.Add((New-AcctObj ([string]$a.id) ([string]$a.label) ([string]$a.short) ([string]$a.dir) ([string]$a.color) ($a.enabled -ne $false)))
@@ -289,7 +289,7 @@ function Start-AccountLogin($a, [switch]$Inline) {
     }
 }
 
-function Get-State { try { Get-Content -LiteralPath $StateFile -Raw -Encoding utf8 | ConvertFrom-Json } catch { $null } }
+function Get-State { try { Get-Content -LiteralPath $StateFile -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json } catch { $null } }
 function Save-LastUsed([string]$id) {
     try { ([ordered]@{ last = $id } | ConvertTo-Json) | Set-Content -LiteralPath $StateFile -Encoding utf8 } catch {}
 }
@@ -346,7 +346,7 @@ function Ensure-StatusLine([string]$claudeDir) {
     $cmd = "pwsh -NoProfile -File `"$((Join-Path $Tools 'statusline.ps1') -replace '\\', '/')`""
     $j = $null
     if (Test-Path -LiteralPath $file) {
-        try { $j = Get-Content -LiteralPath $file -Raw -Encoding utf8 | ConvertFrom-Json } catch { return }
+        try { $j = Get-Content -LiteralPath $file -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json } catch { return }
     }
     if (-not $j) { $j = [pscustomobject]@{} }
     $cur = $j.statusLine.command
@@ -791,7 +791,7 @@ function Git-Do([string]$dir, [string[]]$gargs) {
 
 function Get-Sources {
     $j = $null
-    try { $j = Get-Content -LiteralPath $SrcFile -Raw -Encoding utf8 | ConvertFrom-Json } catch {}
+    try { $j = Get-Content -LiteralPath $SrcFile -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json } catch {}
     , @(foreach ($s in @($j.sources)) {
             if (-not $s.id) { continue }
             $type = if ([string]$s.type -eq 'git') { 'git' } else { 'folder' }
@@ -818,7 +818,7 @@ function Save-Sources($list) {
 
 function Get-SharedLocal {
     $h = @{}
-    try { $j = Get-Content -LiteralPath $ShLocFile -Raw -Encoding utf8 | ConvertFrom-Json; foreach ($pr in $j.PSObject.Properties) { $h[$pr.Name] = $pr.Value } } catch {}
+    try { $j = Get-Content -LiteralPath $ShLocFile -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json; foreach ($pr in $j.PSObject.Properties) { $h[$pr.Name] = $pr.Value } } catch {}
     $h
 }
 
@@ -834,7 +834,7 @@ function Get-SharedProfiles {
             if (-not $src.Ok) { continue }
             foreach ($f in (Get-ChildItem -LiteralPath $src.Dir -Filter *.json -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
                 $j = $null
-                try { $j = Get-Content -LiteralPath $f.FullName -Raw -Encoding utf8 | ConvertFrom-Json } catch {}
+                try { $j = Get-Content -LiteralPath $f.FullName -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json } catch {}
                 if (-not $j -or -not $j.rows) { continue }   # pas un profil FLOW
                 $key = "$($src.Id)/$($f.BaseName)"
                 $cwd = if ($loc[$key]) { [string]$loc[$key].cwd } else { $null }
