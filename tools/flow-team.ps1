@@ -2167,7 +2167,8 @@ function Mode-Review {
         $W = [Math]::Max(40, (ConW) - 1)
         $L = [Collections.Generic.List[string]]::new()
         $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — à valider' 0.1)   $Dm$($State.id)$R")
-        $L.Add("  $B$($State.summary)$R"); $L.Add('')
+        $L.Add("  $B$($State.summary)$R")
+        $L.Add("  $Teal Le travail est terminé : F le met dans ton projet · N pose une nouvelle demande (celle-ci reste à valider)$R"); $L.Add('')
         $merged = @($State.integration.merged); $skipped = @($State.integration.skipped)
         $L.Add("  $Dm branche d'intégration$R $ib   $Dm dossier$R $iw")
         $L.Add("  $Ok✓ fusionnées : $(if ($merged) { $merged -join ', ' } else { 'aucune' })$R$(if ($skipped) { "   $Warn laissées de côté : $($skipped -join ', ')$R" })")
@@ -2200,11 +2201,11 @@ function Mode-Review {
             default  { "fusionner dans $target" }
         }
         $L.Add("  $Dm commit final : « $(Final-Title) »$R")
-        $L.Add((Keys @('F', $fLabel, 'L', 'autre livraison', 'D', 'diff', 'O', 'terminal', 'J', 'jeter', 'Échap', 'plus tard')))
+        $L.Add((Keys @('F', $fLabel, 'L', 'autre livraison', 'D', 'diff', 'O', 'terminal', 'J', 'jeter', 'N', 'nouvelle demande', 'Échap', 'accueil')))
         if ($msg) { $L.Add("  $msg") }
         Show-Frame $L
         $k = (Read-KeyOrHint); $ch = "$($k.KeyChar)".ToLower()
-        if ($k.Key -eq 'Escape') { return 'quit' }
+        if ($k.Key -eq 'Escape' -or $ch -eq 'n') { return 'home' }   # retour à l'accueil de l'équipe : nouvelle demande (N) ; celle-ci reste à valider
         elseif ($ch -eq 'd') {
             $c = "Set-Location -LiteralPath $(Q $iw); $(Git-Env)git diff $($State.base)..HEAD"
             Open-Pane '_diff' "⚑ diff · $($State.id)" $c $iw; [void](Focus-Pane '_diff')

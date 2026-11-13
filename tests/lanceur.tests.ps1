@@ -35,6 +35,28 @@ Describe 'Expand-Rows : un Claude par compte connecté, quel que soit le profil'
     }
 }
 
+Describe 'Profile-Sig : savoir si une session ouverte correspond encore au profil' {
+    BeforeAll {
+        function Get-Accounts { , @($global:Accounts) }
+        function Make-Prof([object[]]$panes) { [pscustomobject]@{ rows = @([pscustomobject]@{ height = 100; panes = $panes }) } }
+        $global:FlowVersion = '1.0'
+    }
+    It 'ne change pas quand on ne fait que déplacer ou redimensionner les panneaux (Ctrl+B W)' {
+        $global:Accounts = @((New-Acct 'a'))
+        $a = Make-Prof @([pscustomobject]@{ role = 'team'; width = 50 }, [pscustomobject]@{ role = 'monitor'; width = 50 })
+        $b = Make-Prof @([pscustomobject]@{ role = 'monitor'; width = 20 }, [pscustomobject]@{ role = 'team'; width = 80 })
+        Profile-Sig $a | Should -Be (Profile-Sig $b)
+    }
+    It 'change quand le profil gagne un panneau, ou quand un compte est connecté' {
+        $global:Accounts = @((New-Acct 'a'))
+        $base = Make-Prof @([pscustomobject]@{ role = 'team' })
+        $sig = Profile-Sig $base
+        Profile-Sig (Make-Prof @([pscustomobject]@{ role = 'team' }, [pscustomobject]@{ role = 'exchanges' })) | Should -Not -Be $sig
+        $global:Accounts = @((New-Acct 'a'), (New-Acct 'b'))
+        Profile-Sig $base | Should -Not -Be $sig
+    }
+}
+
 Describe 'Pane-Command : panneau Claude' {
     It 'avec plusieurs comptes, ajoute la consigne de répartition (skill taches-repartir)' {
         $global:Accounts = @((New-Acct 'a'), (New-Acct 'b'))

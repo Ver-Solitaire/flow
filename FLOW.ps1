@@ -817,9 +817,32 @@ function Pane-Title($pane, $p) {
 
 function Step([string]$txt) { Write-Host "   $(PalC ((Get-Date).Millisecond / 1000))◆$R $txt" }
 
-function Start-FlowProfile($p) {
+function Profile-Sig($p) {
+    # empreinte de ce qu'un profil ouvre : les rôles des panneaux, les comptes connectés et la version de FLOW (pas les largeurs ni
+    # l'ordre : Ctrl+B W ne doit pas faire croire que le profil a changé). Posée sur la session à sa création.
+    $roles = foreach ($row in @($p.rows)) { foreach ($pn in @($row.panes)) { "$($pn.role)/$($pn.account)/$([bool]$pn.perAccount)" } }
+    $accs = @(Get-Accounts | Where-Object { $_.Enabled -and $_.Logged } | ForEach-Object { $_.Id }) -join ','
+    $txt = ((@($roles) | Sort-Object) -join ';') + "|$accs|$FlowVersion"
+    [BitConverter]::ToString([Security.Cryptography.SHA1]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($txt))).Replace('-', '').Substring(0, 12)
+}
+
+function Start-FlowProfile($p, [switch]$NoPrompt) {
     $s = SessionName $p
-    if (Test-Session $s) { Step "session déjà ouverte : rattachement"; return $s }
+    $sig = Profile-Sig $p
+    if (Test-Session $s) {
+        # session déjà ouverte : si le profil ne donne plus la même chose (panneau ajouté, compte connecté depuis, nouvelle version), on le dit
+        $have = "$(& psmux -L $Sock display-message -t $s -p '#{@flow_sig}' 2>$null | Select-Object -First 1)".Trim()
+        if ($NoPrompt -or $have -eq $sig) { Step "session déjà ouverte : rattachement"; return $s }
+        $i = Pick-Item "◆ « $($p.name) » : cette session ne correspond plus au profil" @('Garder la session telle quelle', 'Reconstruire avec le profil à jour (ferme la session actuelle)') { param($x) $x } {
+            param($x)
+            @("$Dm Le profil a changé depuis l'ouverture de cette session (panneau ajouté, compte connecté depuis, nouvelle version de FLOW…).$R",
+              "$Warn Reconstruire ferme tous les panneaux de cette session, ouvriers d'une équipe compris. Les conversations restent reprenables (/resume) et le travail déjà commité reste dans Git.$R")
+        } 0
+        if ($i -ne 1) { Step "session déjà ouverte : rattachement"; return $s }
+        Write-FlowLog "session $s reconstruite : le profil avait changé"
+        & psmux -L $Sock kill-session -t $s *> $null
+        for ($k = 0; $k -lt 30 -and (Test-Session $s); $k++) { Start-Sleep -Milliseconds 100 }
+    }
 
     $script:Accounts = Get-Accounts
     # les panneaux « perAccount » deviennent un Claude par compte connecté (le profil d'origine n'est pas modifié)
@@ -908,6 +931,7 @@ function Start-FlowProfile($p) {
     if ($f) { & psmux -L $Sock select-pane -t $f.T *> $null }
     # réorganiser les panneaux : fichier du profil (pour Ctrl+B W) et raccourcis
     if ($p.File) { & psmux -L $Sock set -t $s '@flow_profile' ([string]$p.File) *> $null }
+    & psmux -L $Sock set -t $s '@flow_sig' $sig *> $null
     # pour Ctrl+B T (fenêtre Équipe à la demande) : dossier du projet et comptes de la session
     & psmux -L $Sock set -t $s '@flow_cwd' $cwd *> $null
     & psmux -L $Sock set -t $s '@flow_accounts' (Team-Accounts) *> $null
@@ -2230,7 +2254,7 @@ try {
             $p | Add-Member -NotePropertyName $kv[0] -NotePropertyValue $kv[1] -Force
         }
         if (-not $NoAttach -and -not (Invoke-AccountGate $p).Go) { return }
-        $s = Start-FlowProfile $p
+        $s = Start-FlowProfile $p -NoPrompt:$NoAttach
         if ($NoAttach) { "session prête : $s  (psmux -L $Sock attach -t $s)"; return }
         Enter-Flow $s
         return
@@ -2242,7 +2266,7 @@ try {
         $p = (Prepare-Launch $p).P
         if (-not $p) { return }
         if (-not $NoAttach -and -not (Invoke-AccountGate $p).Go) { return }
-        $s = Start-FlowProfile $p
+        $s = Start-FlowProfile $p -NoPrompt:$NoAttach
         Save-LastUsed $p.Id
         if ($NoAttach) { "session prête : $s  (psmux -L $Sock attach -t $s)"; return }
         Enter-Flow $s
