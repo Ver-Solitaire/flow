@@ -19,7 +19,9 @@ param(
     [string]$Accounts,            # id|libellé|couleur|CLAUDE_CONFIG_DIR (vide = ~\.claude)|nom court ; …
     [int]$MaxTasks = 4,
     [string]$TestCommand,         # commande de test lancée sur la branche d'intégration (sinon détectée)
-    [string]$WorkerArgs = '--permission-mode acceptEdits'   # chaque ouvrier est isolé dans son worktree
+    [string]$WorkerArgs = '--permission-mode acceptEdits',  # chaque ouvrier est isolé dans son worktree
+    [switch]$NoReview,            # sans relecture croisée (par défaut : chaque tâche finie est relue par un autre compte)
+    [int]$MaxReviews = 2          # nombre maximal de relectures par tâche
 )
 
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -185,15 +187,20 @@ function Least-Loaded {
     Usable-Accounts | Sort-Object { Acct-Load $_ } | Select-Object -First 1
 }
 function Assign-Accounts($tasks) {
-    # répartition : chaque tâche va au compte le moins chargé (limites actuelles + tâches déjà données)
-    $u = Usable-Accounts
+    # répartition : chaque tâche va au compte connecté le moins chargé (limites actuelles + tâches déjà données).
+    # Le poids d'une tâche dépend de leur nombre : avec des comptes de charge proche, le travail est réparti
+    # entre eux ; un compte presque à sa limite reste épargné.
+    $u = @(Usable-Accounts)
+    $tasks = @($tasks)
+    $step = [Math]::Max(15, [int](100 / [Math]::Max(1, $tasks.Count)))
     $load = @{}; foreach ($a in $u) { $load[$a.Id] = Acct-Load $a }
     foreach ($t in $tasks) {
         $best = $u | Sort-Object { $load[$_.Id] } | Select-Object -First 1
         $t.account = $best.Id
-        $load[$best.Id] += 15
+        $load[$best.Id] += $step
     }
 }
+function Missing-Accounts { @($Accs | Where-Object { -not (Acct-Logged $_) }) }
 function Acct-Chip([string]$id) {
     $a = Acct-ById $id
     if ($a) { "$(RgbA $a.Rgb)◆ $($a.Short)$R" } else { "$Dm◆ ?$R" }
@@ -464,10 +471,12 @@ function Save-State {
 function Use-Run($st) {
     # équipes créées avant l'ajout des modèles / du conseiller : champs manquants complétés
     foreach ($t in @($st.tasks)) {
-        foreach ($kv in @(@('model', 'sonnet'), @('why', ''), @('advisor', ''), @('advice', 0), @('helpSeen', ''))) {
+        foreach ($kv in @(@('model', 'sonnet'), @('why', ''), @('advisor', ''), @('advice', 0), @('helpSeen', ''),
+                          @('review', ''), @('reviews', 0), @('reviewSeen', ''), @('reviewer', ''), @('annSeen', ''))) {
             if ($null -eq $t.($kv[0])) { $t | Add-Member -NotePropertyName $kv[0] -NotePropertyValue $kv[1] -Force }
         }
     }
+    if ($null -eq $st.crossReview) { $st | Add-Member -NotePropertyName crossReview -NotePropertyValue (-not $NoReview) -Force }
     $script:State = $st
     $script:RunDir = Join-Path $RepoRoot ".flow\runs\$($st.id)"
     $script:WtRoot = Join-Path (Split-Path $RepoRoot -Parent) "$(Split-Path $RepoRoot -Leaf)-flow\$($st.id)"
@@ -487,6 +496,9 @@ function Task-Branch($t) { "$(Run-Prefix)$($State.id)-$($t.id)" }
 function Int-Branch { "$(Run-Prefix)$($State.id)" }
 function Int-Dir { Join-Path $WtRoot '_integration' }
 function Result-File([string]$id) { Join-Path $RunDir "resultats\$id.md" }
+function Review-File([string]$id) { Join-Path $RunDir "relectures\$id.md" }      # relectures croisées de la tâche
+function Announce-File([string]$id) { Join-Path $RunDir "annonces\$id.md" }      # annonces de l'ouvrier à ses coéquipiers
+function Board-File { Join-Path $RunDir 'TABLEAU.md' }                           # état de l'équipe, tenu à jour par FLOW
 function Deps($t) { @(@($t.depends) | Where-Object { $_ }) }
 function Task-ById([string]$id) { @($State.tasks) | Where-Object { $_.id -eq $id } | Select-Object -First 1 }
 
@@ -585,6 +597,13 @@ function Conventions-Text {
 
 function Worker-Prompt($t) {
     $wt = $t.worktree; $br = Task-Branch $t
+    $rev = if ($State.crossReview) { @(
+        "- RELECTURE CROISÉE : une fois ton compte-rendu écrit, un Claude d'un autre compte relit ton travail. S'il trouve des",
+        "  problèmes, tu reçois un message « [FLOW] Relecture croisée » : lis $(Review-File $t.id) (dernière section), corrige les",
+        "  points bloquants et importants (si tu n'es pas d'accord avec un point, explique pourquoi dans ton compte-rendu),",
+        "  relance les vérifications, fais un commit, puis RÉÉCRIS ton compte-rendu en y ajoutant ce que tu as corrigé :",
+        "  c'est sa mise à jour qui signale que tu as fini."
+    ) -join "`n" } else { '' }
     $conv = Conventions-Text
     $commitHint = if ($Cfg.commitStyle -eq 'conventional') { 'un message Conventional Commits (ex. « feat: … »)' } else { 'un message dans le style de l''historique du projet' }
     @"
@@ -606,6 +625,17 @@ Tu travailles dans TA copie du dépôt : $wt (branche $br). Les autres travaille
    - les points d'attention pour l'intégration (interfaces, noms, migrations…) ;
    - ce qui reste à faire ou n'a pas pu être vérifié.
    Ce fichier signale à l'équipe que ta tâche est terminée : ne l'écris qu'une fois le commit fait.
+
+## Travailler en équipe (synchronisation)
+- Le tableau de l'équipe est tenu à jour ici : $(Board-File) — qui fait quoi, ce qui est fini, où lire le travail des autres
+  (comptes-rendus dans $(Join-Path $RunDir 'resultats'), code des tâches finies avec « git show <branche>:<chemin> »).
+  Consulte-le quand ta tâche se raccorde à celle d'un autre, au lieu de deviner ses noms ou ses formats.
+- Si tu prends une décision qui concerne les autres (un nom, une signature, un format, un fichier partagé que tu as dû
+  toucher, un écart par rapport au brief), ANNONCE-LA tout de suite : ajoute quelques lignes datées dans
+  $(Announce-File $t.id). FLOW prévient aussitôt les autres ouvriers. N'annonce que ce qui change leur travail.
+- Les messages qui commencent par « [FLOW] Info équipe » ou « [FLOW] Annonce » viennent de tes coéquipiers : tiens-en
+  compte si ta tâche est concernée, sinon continue sans t'interrompre.
+$rev
 
 ## Si la tâche devient trop complexe
 Tu as un CONSEILLER (un modèle plus puissant). Si tu bloques, si tu tournes en rond ou si la tâche s'avère plus
@@ -669,7 +699,10 @@ function Pane-Cmd([string]$dir, $acct, [string]$promptFile, [switch]$Continue, [
     $mod = if ($Model) { "--model $Model " } else { '' }
     if ($Continue) { return "${pre}claude --continue $mod$WorkerArgs --add-dir $(Q $RunDir)" }
     $msg = "Lis le fichier $promptFile et suis exactement ses instructions."
-    "${pre}claude $mod$WorkerArgs --add-dir $(Q $RunDir) $(Q $msg)"
+    # La consigne passe EN PREMIER : « --add-dir » accepte plusieurs dossiers, un texte placé après lui serait pris pour un
+    # dossier de plus et Claude s'ouvrirait sur une invite vide (vérifié : « claude -p --add-dir X "texte" » échoue,
+    # « claude -p "texte" --add-dir X » répond). Même règle pour toute option à valeurs multiples.
+    "${pre}claude $(Q $msg) $mod$WorkerArgs --add-dir $(Q $RunDir)"
 }
 
 function Find-Pane([string]$tag) {
@@ -770,6 +803,10 @@ function Read-Prompt([string]$initial) {
         $L = [Collections.Generic.List[string]]::new()
         $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — nouvelle demande' 0.1)   $B$(Split-Path $RepoRoot -Leaf)$R  $Dm$RepoRoot$R")
         $L.Add("  $(Accounts-Line)")
+        $miss = @(Missing-Accounts)
+        if ($miss.Count -and $Accs.Count -gt 1) { $L.Add("  $Warn⚠ $(($miss.Label) -join ', ') : non connecté — F4 pour le connecter (sinon tout part sur les autres comptes)$R") }
+        $wait = @(Open-Runs).Count
+        if ($wait) { $L.Add("  $Teal⚑ $wait équipe(s) ou plan(s) en attente — F6 pour les voir$R") }
         $chk = (@($Cfg.checks) | ForEach-Object { $_.name }) -join ', '
         $L.Add("  $Dm workflow : $(if ($Cfg.setup) { "préparation « $($Cfg.setup) » · " })vérifs : $(if ($chk) { $chk } else { 'aucune' }) · livraison : $($Cfg.deliver)$R")
         $L.Add('')
@@ -778,7 +815,7 @@ function Read-Prompt([string]$initial) {
         $L.Add('')
         $txt = @(); foreach ($ln in $lines) { $txt += @(Chunks $ln ($W - 6)) }
         if (-not $txt.Count) { $txt = @('') }
-        $room = [Math]::Max(3, $H - 14)
+        $room = [Math]::Max(3, $H - 16)
         $shown = @($txt | Select-Object -Last $room)
         $bc = Rgb 70 74 96
         $L.Add("  $bc╭$('─' * ($W - 5))╮$R")
@@ -788,13 +825,15 @@ function Read-Prompt([string]$initial) {
         }
         $L.Add("  $bc╰$('─' * ($W - 5))╯$R")
         $L.Add('')
-        $L.Add((Keys @('F5 / Ctrl+D', 'envoyer', 'Entrée', 'nouvelle ligne', 'F2', 'profil du projet', 'F3', 'changer de projet', 'Échap', 'quitter')))
+        $L.Add((Keys @('F5 / Ctrl+D', 'envoyer', 'Entrée', 'nouvelle ligne', 'F2', 'profil du projet', 'F3', 'changer de projet', 'F4', 'comptes', 'F6', 'plans en attente', 'Échap', 'quitter')))
         Show-Frame $L
         $k = (Read-KeyOrHint)
         $ctrl = [bool]($k.Modifiers -band [ConsoleModifiers]::Control)
         if ($k.Key -eq 'Escape') { return $null }
         if ($k.Key -eq 'F2') { return '::profile' }
         if ($k.Key -eq 'F3') { return '::project' }
+        if ($k.Key -eq 'F4') { [void](Connect-Missing); continue }
+        if ($k.Key -eq 'F6') { return '::home' }
         if ($k.Key -eq 'F5' -or ($ctrl -and $k.Key -eq 'D')) {
             $t = ($lines -join "`n").Trim()
             if ($t) { return $t } else { continue }
@@ -829,6 +868,51 @@ function Message-Screen([string]$title, [string[]]$body, [string[]]$keys) {
     $L = @('', "  $(Grad $title 0.1)", '') + @($body | ForEach-Object { "  $_" }) + @('', (Keys $keys))
     Show-Frame $L
     (Read-KeyOrHint)
+}
+
+function Connect-Acct($a) {
+    # connexion d'un compte dans ce panneau (claude auth login). Renvoie $true si connecté.
+    Disable-Mouse
+    [Console]::Write("$R$e[?25h$e[2J$e[H")
+    Write-Host ''
+    Write-Host "  $(Grad "⚑ ÉQUIPE — connexion de « $($a.Label) »" 0.1)"
+    Write-Host "  $Dm dossier du compte : $($a.Home)$R"
+    Write-Host ''
+    Write-Host '  Claude va ouvrir la page de connexion dans ton navigateur.'
+    Write-Host "  $Warn Ton navigateur est déjà connecté à un autre compte ?$R Copie le lien ci-dessous dans une fenêtre"
+    Write-Host '  privée, connecte-toi avec le bon compte, puis colle ici le code obtenu.'
+    Write-Host ''
+    New-Item -ItemType Directory -Force $a.Home | Out-Null
+    $old = $env:CLAUDE_CONFIG_DIR
+    try {
+        if ($a.Dir) { $env:CLAUDE_CONFIG_DIR = $a.Dir } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
+        # Start-Process : la sortie va droit à l'écran (un appel direct serait capturé par l'appelant, lien compris)
+        Start-Process -FilePath (Get-Command claude -ErrorAction Stop).Source -ArgumentList @('auth', 'login') -NoNewWindow -Wait
+    } catch { Write-Host "  $Err$($_.Exception.Message)$R" }
+    finally { if ($old) { $env:CLAUDE_CONFIG_DIR = $old } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue } }
+    $ok = Acct-Logged $a
+    if (-not $ok) {
+        Write-Host ''
+        Write-Host "  $Warn○ « $($a.Label) » n'est pas encore connecté.$R $Dm Entrée pour continuer.$R"
+        [void][Console]::ReadLine()
+    }
+    Enable-Mouse
+    $script:LastFrameSize = ''; Cls
+    $ok
+}
+
+function Connect-Missing {
+    # propose de connecter chaque compte non connecté ; renvoie le nombre de comptes connectés à l'instant
+    $n = 0
+    foreach ($a in @(Missing-Accounts)) {
+        $k = Message-Screen "⚑ ÉQUIPE — « $($a.Label) » n'est pas connecté" @(
+            "Sans lui, ses tâches iront aux autres comptes : $(Accounts-Line)", '',
+            "$Dm dossier du compte : $($a.Home)$R") @('Entrée', 'le connecter maintenant', 'S', 'passer', 'Échap', 'retour')
+        if ($k.Key -eq 'Escape') { break }
+        if ($k.Key -eq 'Enter') { if (Connect-Acct $a) { $n++ } }
+    }
+    Cls
+    $n
 }
 
 function Wait-Job-Spinner($job, [string]$label) {
@@ -960,6 +1044,12 @@ function Mode-Home {
             elseif ("$($k.KeyChar)".ToLower() -eq 'n') { break }
             elseif ($k.Key -eq 'Enter') {
                 Use-Run $runs[$i]
+                if ($State.status -eq 'planned') {
+                    # plan déposé par tools\flow-plan.ps1 (skill « taches-repartir ») : comptes à attribuer
+                    if (@($State.tasks | Where-Object { -not (Acct-ById ([string]$_.account)) }).Count) { Assign-Accounts @($State.tasks) }
+                    if (-not $State.deliver) { $State.deliver = [string]$Cfg.deliver }
+                    Save-State
+                }
                 switch ($State.status) {
                     'planned' { return 'plan' }
                     'running' { return 'run' }
@@ -974,6 +1064,7 @@ function Mode-Home {
     if ($null -eq $req) { return 'quit' }
     if ($req -eq '::profile') { return 'profile' }
     if ($req -eq '::project') { return 'project' }
+    if ($req -eq '::home') { return 'home' }
 
     # point de départ : la branche cible du profil, sinon le dernier commit de la branche actuelle
     $baseRef = if ($Cfg.targetBranch) { [string]$Cfg.targetBranch } else { 'HEAD' }
@@ -996,7 +1087,7 @@ function Mode-Home {
         base = (Git-In $RepoRoot @('rev-parse', $baseRef) | Select-Object -First 1).Trim()
         baseBranch = $(if ($Cfg.targetBranch) { [string]$Cfg.targetBranch } else { (Git-In $RepoRoot @('rev-parse', '--abbrev-ref', 'HEAD') | Select-Object -First 1).Trim() })
         prefix = [string]$Cfg.branchPrefix; deliver = [string]$Cfg.deliver; commitTitle = ''
-        summary = ''; brief = ''; planner = ''; tasks = @()
+        summary = ''; brief = ''; planner = ''; tasks = @(); crossReview = (-not $NoReview)
         integration = [pscustomobject]@{ merged = @(); skipped = @(); conflict = ''; tests = $null; checks = @(); delivered = '' }
     }
     Use-Run $st
@@ -1137,6 +1228,7 @@ function Apply-Plan($plan) {
             model = $model; why = [string]$p.why
             account = ''; status = 'pending'; worktree = ''; error = ''; live = ''; startedAt = ''; doneAt = ''
             advisor = ''; advice = 0; helpSeen = ''
+            review = ''; reviews = 0; reviewSeen = ''; reviewer = ''; annSeen = ''
         }
         $i++
     }
@@ -1193,8 +1285,14 @@ function Mode-Plan {
         $L.Add("    $Dm conseiller si la tâche se complique : $(Model-Chip (Advisor-Model $t.model))$R")
         foreach ($x in @(Chunks "Fini quand : $($t.done)" ($W - 8)) | Select-Object -First 2) { $L.Add("    $Dm$x$R") }
         foreach ($x in Plan-Warnings) { $L.Add("  $Warn$x$R") }
+        $miss = @(Missing-Accounts)
+        if ($miss.Count -and $Accs.Count -gt 1) {
+            $onMiss = @($ts | Where-Object { $_.account -in $miss.Id })
+            $L.Add("  $Warn⚠ $(($miss.Label) -join ', ') : non connecté$(if ($onMiss.Count) { " — tâche(s) $(($onMiss.id) -join ', ') à réattribuer" } else { ' — tout est réparti sur les comptes connectés' }) · C pour le connecter$R")
+        }
+        $L.Add("  $Dm relecture croisée : $(if ($State.crossReview) { 'activée — chaque tâche finie est relue par un Claude d''un autre compte avant la fusion' } else { 'désactivée' }) · V pour changer$R")
         $L.Add('')
-        $L.Add((Keys @('Entrée', 'lancer l''équipe', 'Tab', 'compte', 'M', 'modèle', 'E', 'modifier le plan', 'R', 'replanifier', 'Échap', 'abandonner')))
+        $L.Add((Keys @('Entrée', 'lancer l''équipe', 'Tab', 'compte', 'M', 'modèle', 'A', 'répartir', 'C', 'comptes', 'E', 'modifier le plan', 'R', 'replanifier', 'Échap', 'abandonner')))
         $L.Add("  $Dm clic : choisir une tâche · clic sur ◆ compte ou ◇ modèle : le changer$R")
         Show-Frame $L
         foreach ($pz in $planZones) {
@@ -1218,7 +1316,26 @@ function Mode-Plan {
             $ids = @($Accs.Id); $cur = [array]::IndexOf($ids, $t.account)
             $t.account = $ids[($cur + 1) % $ids.Count]; Save-State
         }
+        elseif ($ch -eq 'a') { Assign-Accounts $ts; Save-State }
+        elseif ($ch -eq 'v') { $State.crossReview = -not $State.crossReview; Save-State }
+        elseif ($ch -eq 'c') {
+            if (-not @(Missing-Accounts).Count) { [void](Message-Screen '⚑ ÉQUIPE — comptes' @("$Ok Tous les comptes sont connectés :$R $(Accounts-Line)") @('Entrée', 'retour')) }
+            elseif ((Connect-Missing) -gt 0) { Assign-Accounts $ts; Save-State }   # un compte de plus : nouvelle répartition
+            Cls
+        }
         elseif ($k.Key -eq 'Enter') {
+            # une tâche confiée à un compte non connecté resterait bloquée sur l'écran de connexion de Claude
+            $missIds = @((Missing-Accounts).Id)
+            $stuck = @($ts | Where-Object { $_.account -in $missIds })
+            if ($stuck.Count -and @($Accs | Where-Object { $_.Id -notin $missIds }).Count) {
+                $k2 = Message-Screen '⚑ ÉQUIPE — compte non connecté' @(
+                    "La ou les tâches $(($stuck.id) -join ', ') sont confiées à un compte qui n'est pas connecté.", '',
+                    'C = connecter le compte maintenant · A = les donner aux comptes connectés') @('C', 'connecter', 'A', 'répartir sur les comptes connectés', 'Échap', 'retour au plan')
+                $c2 = "$($k2.KeyChar)".ToLower()
+                if ($c2 -eq 'c') { [void](Connect-Missing) }
+                elseif ($c2 -eq 'a') { Assign-Accounts $ts; Save-State }
+                Cls; continue
+            }
             Write-TaskFiles
             $State.status = 'running'; Save-State
             return 'run'
@@ -1322,6 +1439,153 @@ function Check-Advisors {
     }
 }
 
+# ───────────────────────── relecture croisée & synchronisation ─────────────────────────
+$RevJobs = @{}   # tâche → relecture en cours (tâche de fond)
+
+function Review-Model([string]$m) { if ($m -eq 'opus') { 'opus' } else { 'sonnet' } }
+
+function Pick-Reviewer($t) {
+    # un Claude d'un AUTRE compte que l'ouvrier (le moins chargé) ; à défaut, le même compte (regard neuf quand même)
+    $u = @(Usable-Accounts)
+    $other = @($u | Where-Object { $_.Id -ne $t.account })
+    if ($other.Count) { $other | Sort-Object { Acct-Load $_ } | Select-Object -First 1 } else { $u | Select-Object -First 1 }
+}
+
+function Review-Prompt($t, [string]$diffFile, [int]$round) {
+    $prev = if ($round -gt 1) { "`nC'est la relecture n°$round : lis d'abord la relecture précédente ($(Review-File $t.id)) et vérifie que ses points ont été corrigés (ou que l'ouvrier a expliqué son désaccord dans son compte-rendu) avant de chercher autre chose.`n" } else { '' }
+    @"
+Tu es le RELECTEUR de la tâche $($t.id) — $($t.title), réalisée par un autre Claude de l'équipe. C'est une relecture
+croisée : un regard neuf avant que ce travail soit fusionné avec celui des autres. Tu ne modifies AUCUN fichier.
+$prev
+1. Lis le brief commun : $(Join-Path $RunDir 'BRIEF.md'), la fiche de la tâche : $(Join-Path $RunDir "taches\$($t.id).md")
+   et le compte-rendu de l'ouvrier : $(Result-File $t.id).
+2. Lis ses changements : $diffFile (le code complet est dans $($t.worktree), en lecture seule : Read, Grep, Glob).
+3. Regarde les autres tâches de l'équipe (fiches dans $(Join-Path $RunDir 'taches'), comptes-rendus déjà écrits dans
+   $(Join-Path $RunDir 'resultats'), annonces dans $(Join-Path $RunDir 'annonces')) : ce travail doit s'y raccorder.
+
+Cherche, par ordre d'importance :
+- ce qui ne fait pas ce que demande la fiche, ou un critère de fin non rempli ;
+- les erreurs de logique et les cas non gérés qui casseraient à l'usage ;
+- ce qui ne respecte pas les décisions communes du brief ou ne se raccorde pas aux autres tâches (noms, signatures,
+  formats de données, emplacements) ;
+- les fichiers modifiés hors du périmètre de la tâche sans raison donnée ;
+- un comportement ajouté sans aucun test alors que le projet en a.
+Ne signale ni le style ni les préférences personnelles. Si le travail est bon, dis-le : ne cherche pas des problèmes
+pour en trouver. Un problème = un endroit précis et la correction que tu proposes.
+
+Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ni après :
+{ "verdict": "ok" ou "changes",
+  "summary": "ton avis en deux phrases",
+  "issues": [ { "severity": "bloquant" ou "important" ou "mineur", "file": "chemin", "problem": "ce qui ne va pas", "fix": "correction proposée" } ] }
+"verdict" vaut "changes" seulement s'il y a au moins un problème bloquant ou important.
+"@
+}
+
+function Start-Review($t) {
+    if ($RevJobs.ContainsKey($t.id)) { return }
+    $acct = Pick-Reviewer $t
+    $model = Review-Model $t.model
+    $round = [int]$t.reviews + 1
+    New-Item -ItemType Directory -Force (Split-Path (Review-File $t.id)) | Out-Null
+    $deps = Deps $t
+    $from = if ($deps.Count) { Task-Branch (Task-ById $deps[0]) } else { $State.base }
+    $diff = (Git-In $t.worktree @('diff', "$from..HEAD")) -join "`n"
+    if ($diff.Length -gt 300000) { $diff = $diff.Substring(0, 300000) + "`n… (diff tronqué : lis les fichiers dans la copie de travail)" }
+    $df = Join-Path $RunDir "relectures\$($t.id)-$round.diff"
+    Set-Content -LiteralPath $df $diff -Encoding utf8
+    $pf = Join-Path $RunDir "relectures\$($t.id)-$round.prompt.md"
+    Set-Content -LiteralPath $pf (Review-Prompt $t $df $round) -Encoding utf8
+    $msg = "Lis le fichier $pf et suis exactement ses instructions. Ta réponse finale doit être uniquement l'objet JSON demandé."
+    $job = Start-Job -ScriptBlock {
+        param($cwd, $dir, $msg, $runDir, $model)
+        Set-Location -LiteralPath $cwd
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
+        if ($dir) { $env:CLAUDE_CONFIG_DIR = $dir } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
+        $out = & claude -p $msg --model $model --output-format json --allowedTools 'Read,Grep,Glob' --add-dir $runDir 2>&1 | Out-String
+        [pscustomobject]@{ Code = $LASTEXITCODE; Out = $out }
+    } -ArgumentList $t.worktree, $acct.Dir, $msg, $RunDir, $model
+    $RevJobs[$t.id] = [pscustomobject]@{ Job = $job; Model = $model; Acct = $acct; Round = $round; Start = Get-Date }
+    $t.review = 'pending'; $t.reviewer = $acct.Id
+    Save-State
+}
+
+function Check-Reviews {
+    # relectures rendues : écrites dans relectures\<tâche>.md ; s'il y a des corrections, l'ouvrier est prévenu
+    $note = ''
+    foreach ($id in @($RevJobs.Keys)) {
+        $a = $RevJobs[$id]
+        if ($a.Job.State -eq 'Running') { continue }
+        $rv = Receive-Job $a.Job; Remove-Job $a.Job -Force; $RevJobs.Remove($id)
+        $t = Task-ById $id
+        $rvw = $null
+        try {
+            $j = $rv.Out | ConvertFrom-Json -ErrorAction Stop
+            $txt = [string]$j.result; $x = $txt.IndexOf('{'); $z = $txt.LastIndexOf('}')
+            if (-not $j.is_error -and $x -ge 0 -and $z -gt $x) { $rvw = $txt.Substring($x, $z - $x + 1) | ConvertFrom-Json -ErrorAction Stop }
+        } catch { $rvw = $null }
+        $t.reviews = [int]$t.reviews + 1
+        $head = "`n---`n## Relecture n°$($a.Round) du $(Get-Date -Format 'HH:mm') — par $($a.Acct.Label) ($($a.Model))`n`n"
+        if (-not $rvw) {
+            # relecteur muet ou réponse illisible : on ne bloque pas l'équipe pour autant
+            Add-Content -LiteralPath (Review-File $id) ($head + "(la relecture n'a pas pu être faite)`n") -Encoding utf8
+            $t.review = 'ok'; $note = "$Warn⌕ relecture de $id impossible : tâche acceptée telle quelle$R"
+            continue
+        }
+        $issues = @($rvw.issues | Where-Object { $_ })
+        $serious = @($issues | Where-Object { "$($_.severity)" -match 'bloquant|important' })
+        $md = $head + "**Avis :** $($rvw.summary)`n"
+        foreach ($is in $issues) { $md += "`n- **[$($is.severity)]** ``$($is.file)`` — $($is.problem)`n  - correction proposée : $($is.fix)" }
+        Add-Content -LiteralPath (Review-File $id) ($md + "`n") -Encoding utf8
+        if ("$($rvw.verdict)" -eq 'changes' -and $serious.Count) {
+            $t.review = 'changes'
+            $sent = Send-ToPane $id "[FLOW] Relecture croisée par $($a.Acct.Label) : $($serious.Count) point(s) à corriger. Lis $(Review-File $id) (dernière section), corrige les points bloquants et importants, relance les vérifications, fais un commit, puis RÉÉCRIS ton compte-rendu $(Result-File $id) en y ajoutant ce que tu as corrigé : c'est ce qui signale que tu as fini."
+            if ($Psmux) { Set-PaneState $id 'busy' "✎ corrige après relecture ($($a.Acct.Short))" }
+            Notify "⌕ Relecture de la tâche $id" "$($serious.Count) point(s) à corriger, renvoyés à l'ouvrier."
+            $note = if ($sent) { "$Info⌕ $id relue par $($a.Acct.Short) : $($serious.Count) correction(s) demandée(s) à l'ouvrier$R" } else { "$Err⌕ $id : corrections demandées mais panneau introuvable (L pour relancer, T pour accepter)$R" }
+        } else {
+            $t.review = 'ok'
+            $note = "$Ok⌕ $id relue par $($a.Acct.Short) : rien de bloquant$R"
+        }
+    }
+    Save-State
+    $note
+}
+
+function Tell-Others([string]$fromId, [string]$text) {
+    # message aux autres ouvriers encore au travail (écrit dans leur panneau)
+    foreach ($o in @($State.tasks | Where-Object { $_.id -ne $fromId -and $_.status -eq 'running' })) { [void](Send-ToPane $o.id $text) }
+}
+
+function Finish-Task($t) {
+    $t.status = 'done'; $t.doneAt = (Get-Date).ToString('o'); $t.live = 'done'
+    $rel = if ([int]$t.reviews) { ' et relue' } else { '' }
+    if ($Psmux) { Set-PaneState $t.id 'done' "✓ terminé$(if ($rel) { ' · relu' })" }
+    Notify "✓ Tâche $($t.id) terminée$rel" $t.title
+    Tell-Others $t.id "[FLOW] Info équipe : la tâche $($t.id) ($($t.title)) est terminée$rel. Compte-rendu : $(Result-File $t.id). Son code est sur la branche $(Task-Branch $t) (lecture : git show $(Task-Branch $t):<chemin>). Si ta tâche s'y raccorde, vérifie que tu utilises bien ses noms et ses formats ; sinon continue sans t'interrompre."
+}
+
+$BoardLast = ''
+function Write-Board {
+    # TABLEAU.md : l'état de l'équipe, lisible par tous les ouvriers (réécrit seulement quand il change)
+    $rows = foreach ($t in @($State.tasks)) {
+        $etat = switch ($t.status) {
+            'pending' { 'en attente' }
+            'done'    { "terminée$(if ([int]$t.reviews) { ' et relue' })" }
+            'failed'  { "en échec ($($t.error))" }
+            default   { switch ($t.live) { 'review' { 'en relecture croisée' } 'fixing' { 'corrige après relecture' } default { 'en cours' } } }
+        }
+        $cr = if (Test-Path -LiteralPath (Result-File $t.id)) { Result-File $t.id } else { '—' }
+        $an = if (Test-Path -LiteralPath (Announce-File $t.id)) { Announce-File $t.id } else { '—' }
+        "| $($t.id) | $($t.title) | $etat | $(@($t.files) -join ', ') | $(if ($t.worktree) { Task-Branch $t } else { '—' }) | $cr | $an |"
+    }
+    $body = @("# Tableau de l'équipe — $($State.summary)", '',
+        '| Tâche | Titre | État | Fichiers | Branche | Compte-rendu | Annonces |', '|---|---|---|---|---|---|---|') + @($rows) + @('',
+        "Brief commun : $(Join-Path $RunDir 'BRIEF.md')",
+        'Lire le code d''une tâche sans quitter ta copie : git show <branche>:<chemin>  (ou git diff <branche> -- <chemin>)')
+    $txt = $body -join "`n"
+    if ($txt -ne $script:BoardLast) { try { Set-Content -LiteralPath (Board-File) $txt -Encoding utf8; $script:BoardLast = $txt } catch {} }
+}
+
 function Commits-Of($t) {
     if (-not $t.worktree) { return 0 }
     $n = Git-In $RepoRoot @('rev-list', '--count', "$($State.base)..$(Task-Branch $t)")
@@ -1334,6 +1598,9 @@ function Mode-Run {
     $commits = @{}   # nombre de commits par tâche (recalculé toutes les 2 s, pas à chaque image)
     $autoAdv = @{}   # dernier appel automatique du conseiller par tâche (au plus un toutes les 5 min)
     foreach ($t in @($State.tasks)) { $autoAdv[$t.id] = [datetime]::MinValue; if ($t.advisor -eq 'running') { $t.advisor = '' } }
+    # relecture interrompue par une fermeture de la fenêtre : elle sera relancée
+    foreach ($t in @($State.tasks)) { if ($t.review -eq 'pending' -and -not $RevJobs.ContainsKey($t.id)) { $t.review = ''; $t.reviewSeen = '' } }
+    New-Item -ItemType Directory -Force (Join-Path $RunDir 'annonces'), (Join-Path $RunDir 'relectures') | Out-Null
     Cls
     while ($true) {
         $ts = @($State.tasks)
@@ -1349,9 +1616,18 @@ function Mode-Run {
                 }
                 elseif ($t.status -eq 'running') {
                     if (Test-Path -LiteralPath (Result-File $t.id)) {
-                        $t.status = 'done'; $t.doneAt = (Get-Date).ToString('o'); $t.live = 'done'
-                        if ($Psmux) { Set-PaneState $t.id 'done' '✓ terminé' }
-                        Notify "✓ Tâche $($t.id) terminée" $t.title
+                        # compte-rendu écrit : relecture croisée par un autre compte, puis seulement « terminée »
+                        $stamp = [string](Get-Item -LiteralPath (Result-File $t.id)).LastWriteTimeUtc.Ticks
+                        if ($RevJobs.ContainsKey($t.id)) { $t.live = 'review' }
+                        elseif (-not $State.crossReview -or $t.review -eq 'ok' -or -not $t.worktree) { Finish-Task $t }
+                        elseif ($stamp -ne [string]$t.reviewSeen) {
+                            if ([int]$t.reviews -ge $MaxReviews) { Finish-Task $t }   # il a répondu à la dernière relecture
+                            else {
+                                $t.reviewSeen = $stamp; Start-Review $t; $t.live = 'review'
+                                if ($Psmux) { Set-PaneState $t.id 'busy' "⌕ relecture par $((Acct-ById $t.reviewer).Short)" }
+                            }
+                        }
+                        else { $t.live = 'fixing' }   # corrections demandées : on attend la mise à jour du compte-rendu
                     } elseif ($Psmux -and -not (Find-Pane $t.id)) {
                         $t.live = 'closed'
                     } else {
@@ -1367,6 +1643,15 @@ function Mode-Run {
                 }
                 $prevLive[$t.id] = $t.live
                 if ($t.status -in 'running', 'done') { $commits[$t.id] = Commits-Of $t }
+                # annonce écrite par l'ouvrier : relayée aux autres ouvriers au travail
+                if ($t.status -in 'running', 'done' -and (Test-Path -LiteralPath (Announce-File $t.id))) {
+                    $as = [string](Get-Item -LiteralPath (Announce-File $t.id)).LastWriteTimeUtc.Ticks
+                    if ($as -ne [string]$t.annSeen) {
+                        $t.annSeen = $as
+                        Tell-Others $t.id "[FLOW] Annonce de l'ouvrier $($t.id) ($($t.title)) : lis $(Announce-File $t.id) (dernières lignes). Si elle concerne ta tâche, adapte-toi ; sinon continue sans t'interrompre."
+                        $msg = "$Info⇄ annonce de $($t.id) relayée aux autres ouvriers$R"
+                    }
+                }
                 # besoin d'un conseiller ? (question écrite par l'ouvrier, ou erreurs à la chaîne)
                 if ($t.status -eq 'running' -and $t.worktree -and -not $AdvJobs.ContainsKey($t.id)) {
                     $hf = Help-File $t.id
@@ -1381,6 +1666,8 @@ function Mode-Run {
                 }
             }
             Check-Advisors
+            $rn = Check-Reviews; if ($rn) { $msg = $rn }
+            Write-Board
             Save-State
             $open = @($ts | Where-Object { $_.status -in 'pending', 'running' })
             if (-not $open.Count) {
@@ -1400,10 +1687,12 @@ function Mode-Run {
             $mark = if ($i -eq $sel) { "$(PalC 0.1)$B▸$R" } else { ' ' }
             $st = switch ($t.status) {
                 'pending' { "$Dm⏳ $($t.live)$R" }
-                'done'    { "$Ok✓ terminée$R" }
+                'done'    { "$Ok✓ terminée$(if ([int]$t.reviews) { " · relue par $((Acct-ById $t.reviewer).Short)" })$R" }
                 'failed'  { "$Err✗ $($t.error)$R" }
                 default {
                     switch ($t.live) {
+                        'review'   { "$Info⌕ relecture croisée par $((Acct-ById $t.reviewer).Short) $($Spin[$script:Tick % 10])$R" }
+                        'fixing'   { "$Warn✎ corrige après relecture n°$($t.reviews)$R" }
                         'working'  { "$Warn$($Spin[$script:Tick % 10]) travaille$R" }
                         'waiting'  { "$B$Teal✋ attend ta réponse$R" }
                         'closed'   { "$Err○ panneau fermé (L pour relancer)$R" }
@@ -1422,8 +1711,10 @@ function Mode-Run {
         foreach ($x in @(Chunks $t.goal ($W - 8)) | Select-Object -First 3) { $L.Add("    $Dm$x$R") }
         if ($t.worktree) { $L.Add("    $Dm dossier : $($t.worktree)$R") }
         $L.Add('')
+        if ((Test-Path -LiteralPath (Review-File $t.id)) -and [int]$t.reviews) { $L.Add("    $Dm relecture(s) : $(Review-File $t.id)$R") }
+        $L.Add("  $Dm relecture croisée : $(if ($State.crossReview) { "activée (au plus $MaxReviews par tâche)" } else { 'désactivée' }) · V pour changer · tableau partagé : TABLEAU.md$R")
         if ($Psmux) { $L.Add("  $Dm Les ouvriers sont dans la fenêtre « equipe » (Ctrl+B puis 2 ; Ctrl+B puis 1 pour revenir ici).$R") }
-        $L.Add((Keys @('↑↓', 'choisir', 'Entrée', 'voir l''ouvrier', 'M', 'lui écrire', 'C', 'appeler son conseiller', 'T', 'terminée', 'L', 'relancer', 'I', 'intégrer', 'X', 'abandonner')))
+        $L.Add((Keys @('↑↓', 'choisir', 'Entrée', 'voir l''ouvrier', 'M', 'lui écrire', 'C', 'appeler son conseiller', 'T', 'terminée', 'V', 'relecture', 'L', 'relancer', 'I', 'intégrer', 'X', 'abandonner')))
         if ($msg) { $L.Add("  $msg") }
         Show-Frame $L
         foreach ($rr in $runRows) { Add-Zone $rr.Y $rr.Y 0 999 @{ Row = $rr.Row } }   # chaque ouvrier est cliquable
@@ -1457,7 +1748,9 @@ function Mode-Run {
                     if ($null -ne $why) { Start-Advisor $t $(if ($why) { "l'utilisateur signale : $why" } else { 'l''utilisateur demande un avis sur la tâche' }); $msg = "$Info◈ conseiller $(Advisor-Model $t.model) appelé pour $($t.id)$R" }
                 }
             }
+            elseif ($ch -eq 'v') { $State.crossReview = -not $State.crossReview; Save-State; $msg = "$Info relecture croisée $(if ($State.crossReview) { 'activée' } else { 'désactivée' }) pour les tâches à venir$R" }
             elseif ($ch -eq 't' -and $t.status -eq 'running') {
+                $t.review = 'ok'   # décision de l'utilisateur : acceptée sans (autre) relecture
                 if (-not (Test-Path -LiteralPath (Result-File $t.id))) {
                     Set-Content -LiteralPath (Result-File $t.id) "# Tâche $($t.id)`n`n(marquée terminée à la main par l'utilisateur)`n" -Encoding utf8
                 }

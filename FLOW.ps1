@@ -7,6 +7,7 @@
     FLOW.ps1 -InstallShortcut   crée / met à jour le raccourci « FLOW » sur le bureau
     FLOW.ps1 -Login second      ouvre Claude avec le compte « second » (config\accounts.json) pour s'y connecter
     FLOW.ps1 -Team C:\projet    ouvre la fenêtre Équipe sur n'importe quel projet (une session par projet)
+    FLOW.ps1 -InstallSkills     installe les skills FLOW (dossier skills\) dans chaque compte Claude (fait aussi à chaque lancement)
     FLOW.ps1 -Project C:\projet tous les profils travaillent dans ce projet (sessions propres au projet ; J pour changer)
     FLOW.exe                    application : fenêtre de choix du projet, puis ce sélecteur (créée par -InstallShortcut)
 
@@ -19,6 +20,7 @@ param(
     [switch]$InstallShortcut,
     [string]$Login,             # FLOW.ps1 -Login second : ouvre Claude avec ce compte pour s'y connecter
     [string]$Team,              # FLOW.ps1 -Team C:\mon\projet : session Équipe sur ce projet (sans créer de profil)
+    [switch]$InstallSkills,     # FLOW.ps1 -InstallSkills : (ré)installe les skills FLOW dans chaque compte Claude
     [string]$Project,           # FLOW.ps1 -Project C:\mon\projet : les profils s'ouvrent dans ce projet
     [switch]$Demo,              # FLOW.ps1 -Demo : démonstration avec activité simulée (moniteur, Bureau, personnages)
     [switch]$TeamDemo,          # FLOW.ps1 -TeamDemo : simulation de la fenêtre Équipe (prompt → plan → ouvriers → fusion)
@@ -311,10 +313,123 @@ function Get-Accounts {
     try { $j = Get-Content -LiteralPath $AcctFile -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json } catch {}
     foreach ($a in @($j.accounts)) {
         if (-not $a.id) { continue }
-        $list.Add((New-AcctObj ([string]$a.id) ([string]$a.label) ([string]$a.short) ([string]$a.dir) ([string]$a.color) ($a.enabled -ne $false)))
+        $o = New-AcctObj ([string]$a.id) ([string]$a.label) ([string]$a.short) ([string]$a.dir) ([string]$a.color) ($a.enabled -ne $false)
+        # "email" (facultatif) : adresse préremplie sur la page de connexion de ce compte
+        $o | Add-Member -NotePropertyName Email -NotePropertyValue ([string]$a.email)
+        $list.Add($o)
     }
     if (-not $list.Count) { $list.Add((New-AcctObj 'principal' 'Compte 1' 'C1' $null 'ff8a5c' $true)) }
     , $list
+}
+
+function Acct-Mail($a) {
+    # adresse du compte actuellement connecté (lue dans la configuration locale de Claude), '' si inconnue
+    if (-not $a.Logged) { return '' }
+    $f = if ($a.Dir) { Join-Path $a.Dir '.claude.json' } else { Join-Path $HOME '.claude.json' }
+    try { if ((Get-Content -LiteralPath $f -Raw -ErrorAction Stop) -match '"emailAddress"\s*:\s*"([^"]+)"') { return $Matches[1] } } catch {}
+    ''
+}
+
+function Profile-Accounts($p) {
+    # comptes dont le profil a besoin : ceux de ses panneaux Claude ; avec un panneau Équipe, tous les comptes activés
+    $map = [ordered]@{}
+    foreach ($pn in @(Claude-Panes $p)) { $a = Acct-For $pn $p; if ($a -and -not $map.Contains($a.Id)) { $map[$a.Id] = $a } }
+    if (Uses-Role $p 'team') { foreach ($a in $Accounts) { if ($a.Enabled -and -not $map.Contains($a.Id)) { $map[$a.Id] = $a } } }
+    @($map.Values)
+}
+
+function Connect-Account($a) {
+    # connexion d'un compte dans CETTE fenêtre (claude auth login) : pas de fenêtre à chercher. Renvoie $true si connecté.
+    Disable-Mouse
+    [Console]::Write("$R$e[?25h$e[2J$e[H")
+    Write-Host ''
+    Write-Host "   $(Grad "◆ CONNEXION — $($a.Label)" 0.1 0.03)"
+    Write-Host "   $Dm dossier du compte : $($a.Home)$R"
+    Write-Host ''
+    Write-Host "   Claude va ouvrir la page de connexion dans ton navigateur."
+    Write-Host "   $Warn Ton navigateur est déjà connecté à un autre compte ?$R Copie le lien affiché ci-dessous dans une"
+    Write-Host "   fenêtre privée, connecte-toi avec le bon compte, puis colle ici le code obtenu."
+    Write-Host ''
+    New-Item -ItemType Directory -Force $a.Home | Out-Null
+    $old = $env:CLAUDE_CONFIG_DIR
+    try {
+        if ($a.Dir) { $env:CLAUDE_CONFIG_DIR = $a.Dir } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
+        $largs = @('auth', 'login'); if ($a.Email) { $largs += @('--email', $a.Email) }
+        # Start-Process : la sortie va droit à l'écran (un appel direct serait capturé par l'appelant, lien compris)
+        Start-Process -FilePath (Get-Command claude -ErrorAction Stop).Source -ArgumentList $largs -NoNewWindow -Wait
+    } catch { Write-Host "   $Err$($_.Exception.Message)$R" }
+    finally { if ($old) { $env:CLAUDE_CONFIG_DIR = $old } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue } }
+    $ok = Test-Path -LiteralPath (Join-Path $a.Home '.credentials.json')
+    if ($ok) { Ensure-StatusLine $a.Home; Install-Skills $a.Home }
+    else {
+        Write-Host ''
+        Write-Host "   $Warn○ « $($a.Label) » n'est pas encore connecté.$R $Dm Entrée pour revenir à la liste.$R"
+        [void][Console]::ReadLine()
+    }
+    Enable-Mouse
+    [Console]::Write("$e[?25l$e[2J")
+    $ok
+}
+
+function Add-Account {
+    # ajoute un compte à config\accounts.json (dossier séparé ~\.claude-compteN) ; renvoie le compte, $null si annulé
+    $j = $null
+    try { $j = Get-Content -LiteralPath $AcctFile -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json } catch {}
+    $list = @(@($j.accounts) | Where-Object { $_ -and $_.id })
+    if (-not $list.Count) { $list = @([pscustomobject][ordered]@{ id = 'principal'; label = 'Compte 1'; short = 'C1'; dir = $null; color = '#ff8a5c'; enabled = $true }) }
+    $n = $list.Count + 1
+    while (@($list | Where-Object { $_.id -eq "compte$n" -or $_.short -eq "C$n" -or "$($_.dir)" -match "claude-compte$n$" }).Count -or
+           (Test-Path -LiteralPath (Join-Path $HOME ".claude-compte$n"))) { $n++ }
+    $label = Read-Line '◆ NOUVEAU COMPTE CLAUDE' 'Nom du compte :' "Compte $n" { param($v) if (-not "$v".Trim()) { 'le nom ne peut pas être vide' } } @(
+        "ses identifiants seront rangés à part, dans $(Join-Path $HOME ".claude-compte$n")", 'la connexion est proposée juste après')
+    if ($null -eq $label) { return $null }
+    $cols = '#ff8a5c', '#54baff', '#60e8c4', '#ff5e9e', '#a870ff', '#ffd26e'
+    $usedC = @($list | ForEach-Object { "$($_.color)".ToLower() })
+    $col = $cols | Where-Object { $_ -notin $usedC } | Select-Object -First 1
+    if (-not $col) { $col = $cols[($n - 1) % $cols.Count] }
+    $list += [pscustomobject][ordered]@{ id = "compte$n"; label = "$label".Trim(); short = "C$n"; dir = "~/.claude-compte$n"; color = $col; enabled = $true }
+    New-Item -ItemType Directory -Force (Split-Path $AcctFile) | Out-Null
+    ([pscustomobject]@{ accounts = @($list) } | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $AcctFile -Encoding utf8
+    $script:Accounts = Get-Accounts
+    $Accounts | Where-Object { $_.Id -eq "compte$n" } | Select-Object -First 1
+}
+
+function Invoke-AccountGate($p) {
+    # au lancement d'un profil à plusieurs comptes : connecter ceux qui ne le sont pas encore.
+    # renvoie @{ Go = lancer ? ; Shown = un écran a été affiché }
+    if (Test-Session (SessionName $p)) { return @{ Go = $true } }
+    $shown = $false
+    while ($true) {
+        $script:Accounts = Get-Accounts
+        $need = @(Profile-Accounts $p)
+        $missing = @($need | Where-Object { -not $_.Logged })
+        if ($need.Count -lt 2 -or -not $missing.Count) { return @{ Go = $true; Shown = $shown } }
+        $shown = $true
+        $team = Uses-Role $p 'team'
+        $items = @($need) + @(if ($team) { [pscustomobject]@{ Add = $true } }) + @([pscustomobject]@{ Go = $true })
+        $first = 0; for ($q = 0; $q -lt $need.Count; $q++) { if (-not $need[$q].Logged) { $first = $q; break } }
+        $i = Pick-Item "◆ COMPTES — « $($p.name) » utilise $($need.Count) comptes · $($missing.Count) à connecter" $items {
+            param($x)
+            if ($x.Go) { return "$Info▶ lancer maintenant$R $Dm(sans $(($missing.Label) -join ', '))$R" }
+            if ($x.Add) { return "$Ok＋ ajouter un compte Claude…$R" }
+            $st = if ($x.Logged) { $m = Acct-Mail $x; "$Ok● connecté$R$(if ($m) { " $Dm$m$R" })" } else { "$Warn○ à connecter$R $Dm— Entrée$R" }
+            "$(RgbA $x.Rgb)◆ $($x.Label)$R  $st"
+        } {
+            param($x)
+            if ($x.Add) { return @("$Dm Un compte de plus = un Claude de plus pour se partager les tâches.$R") }
+            if ($x.Go) {
+                if ($team) { return @("$Dm Les tâches seront réparties uniquement sur les comptes connectés.$R") }
+                return @("$Dm Les panneaux des comptes non connectés afficheront l'écran de connexion de Claude.$R")
+            }
+            if ($x.Logged) { return @("$Dm dossier$R  $($x.Home)", "$Dm Entrée : reconnecter ce compte (pour en changer)$R") }
+            @("$Dm dossier$R  $($x.Home)", "$Dm Entrée : se connecter ici même ; une fois tous les comptes connectés, le profil se lance.$R")
+        } $first
+        if ($i -lt 0) { return @{ Go = $false; Shown = $true } }
+        $x = $items[$i]
+        if ($x.Go) { return @{ Go = $true; Shown = $true } }
+        if ($x.Add) { $x = Add-Account; if (-not $x) { continue } }
+        [void](Connect-Account $x)
+    }
 }
 
 function Default-Acct {
@@ -454,7 +569,44 @@ function Ensure-StatusLine([string]$claudeDir) {
     ($j | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $file -Encoding utf8
 }
 
+function Install-Skills([string]$claudeDir) {
+    # copie les skills livrés avec FLOW (dossier skills\) dans <compte>\skills\ : disponibles dans tous les projets,
+    # pour chaque compte. « {{FLOW_ROOT}} » y est remplacé par l'emplacement de FLOW (appel de ses outils).
+    # Un skill du même nom créé par l'utilisateur (sans marqueur .flow-skill) n'est jamais remplacé.
+    $srcRoot = Join-Path $Root 'skills'
+    if (-not (Test-Path -LiteralPath $srcRoot)) { return }
+    foreach ($d in Get-ChildItem -LiteralPath $srcRoot -Directory) {
+        $dest = Join-Path $claudeDir "skills\$($d.Name)"
+        $mark = Join-Path $dest '.flow-skill'
+        if ((Test-Path -LiteralPath $dest) -and -not (Test-Path -LiteralPath $mark)) { continue }
+        $files = @(Get-ChildItem -LiteralPath $d.FullName -Recurse -File)
+        $sig = "$Root|" + (($files | ForEach-Object { "$($_.FullName.Substring($d.FullName.Length))|$($_.Length)|$($_.LastWriteTimeUtc.Ticks)" }) -join ';')
+        if ((Test-Path -LiteralPath $mark) -and ((Get-Content -LiteralPath $mark -Raw -ErrorAction SilentlyContinue) -eq $sig)) { continue }
+        try {
+            if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
+            foreach ($f in $files) {
+                $to = Join-Path $dest $f.FullName.Substring($d.FullName.Length).TrimStart('\')
+                New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
+                $txt = (Get-Content -LiteralPath $f.FullName -Raw -Encoding utf8).Replace('{{FLOW_ROOT}}', $Root)
+                [IO.File]::WriteAllText($to, $txt, [Text.UTF8Encoding]::new($false))
+            }
+            Set-Content -LiteralPath $mark $sig -NoNewline -Encoding utf8
+        } catch {}
+    }
+}
+
+function Install-AllSkills {
+    $n = 0
+    foreach ($a in @($Accounts | Where-Object { $_.Enabled })) { if (Test-Path -LiteralPath $a.Home) { Install-Skills $a.Home; $n++ } }
+    $n
+}
+
 function Q([string]$s) { "'" + ($s -replace "'", "''") + "'" }   # chaîne PowerShell entre apostrophes
+
+function Team-Accounts {
+    # comptes passés à la fenêtre Équipe : « id|libellé|couleur|dossier|nom court ; … »
+    (@($Accounts | Where-Object { $_.Enabled } | ForEach-Object { "$($_.Id)|$($_.Label)|$($_.Hex)|$($_.Dir)|$($_.Short)" })) -join ';'
+}
 
 function Pane-Command($pane, $p) {
     $cd = PCwd $p $pane
@@ -471,11 +623,13 @@ function Pane-Command($pane, $p) {
         }
         'team' {
             # fenêtre Équipe : prompt → plan → ouvriers répartis sur les comptes (tools\flow-team.ps1)
-            $accs = (@($Accounts | Where-Object { $_.Enabled } | ForEach-Object { "$($_.Id)|$($_.Label)|$($_.Hex)|$($_.Dir)|$($_.Short)" })) -join ';'
+            $accs = Team-Accounts
             $opt = ''
             if ($pane.maxTasks) { $opt += " -MaxTasks $([int]$pane.maxTasks)" }
             if ($pane.testCommand) { $opt += " -TestCommand $(Q ([string]$pane.testCommand))" }
             if ($pane.workerArgs) { $opt += " -WorkerArgs $(Q ([string]$pane.workerArgs))" }
+            if ($pane.review -eq $false) { $opt += ' -NoReview' }                     # "review": false = sans relecture croisée
+            if ($pane.maxReviews) { $opt += " -MaxReviews $([int]$pane.maxReviews)" }
             return "${pre}Clear-Host; pwsh -NoProfile -File $(Q (Join-Path $Tools 'flow-team.ps1')) -Repo $(Q $cd) -Sock $Sock -Session $(Q (SessionName $p)) -Accounts $(Q $accs)$opt"
         }
         default   { if ($pane.command) { return "$pre$($pane.command)" } else { return "${pre}Clear-Host" } }
@@ -510,6 +664,7 @@ function Start-FlowProfile($p) {
     $homes = @(foreach ($row in @($p.rows)) { foreach ($pn in @($row.panes)) { (Acct-For $pn $p).Home } })
     if (Uses-Role $p 'monitor') { $homes += @($Accounts | Where-Object { $_.Enabled } | ForEach-Object { $_.Home }) }
     foreach ($h in ($homes | Select-Object -Unique)) { Ensure-StatusLine $h }
+    [void](Install-AllSkills)   # skills FLOW (créer / reprendre / maintenir un projet, répartir les tâches) dans chaque compte
     foreach ($pn in @(Claude-Panes $p)) {
         $a = Acct-For $pn $p
         if ($a -and -not $a.Logged) { Step "$Warn⚠ compte « $($a.Label) » pas encore connecté : Claude proposera de se connecter$R" }
@@ -581,6 +736,9 @@ function Start-FlowProfile($p) {
     if ($f) { & psmux -L $Sock select-pane -t $f.T *> $null }
     # réorganiser les panneaux : fichier du profil (pour Ctrl+B W) et raccourcis
     if ($p.File) { & psmux -L $Sock set -t $s '@flow_profile' ([string]$p.File) *> $null }
+    # pour Ctrl+B T (fenêtre Équipe à la demande) : dossier du projet et comptes de la session
+    & psmux -L $Sock set -t $s '@flow_cwd' $cwd *> $null
+    & psmux -L $Sock set -t $s '@flow_accounts' (Team-Accounts) *> $null
     Bind-PaneKeys
     $s
 }
@@ -593,6 +751,7 @@ function Bind-PaneKeys {
         & psmux -L $Sock bind-key -n "M-S-$($d[0])" run-shell (& $run "-Move $($d[1])") *> $null
     }
     & psmux -L $Sock bind-key -T prefix W run-shell (& $run '-Save') *> $null
+    & psmux -L $Sock bind-key -T prefix T run-shell (& $run '-Team') *> $null
     $menu = @('-T', ' Agencer ',
         'Déplacer à gauche', 'h', "run-shell '$(& $run '-Move L')'",
         'Déplacer à droite', 'l', "run-shell '$(& $run '-Move R')'",
@@ -600,9 +759,13 @@ function Bind-PaneKeys {
         'Déplacer en bas', 'j', "run-shell '$(& $run '-Move D')'",
         '', '', '',
         'Agrandir / rétablir', 'z', 'resize-pane -Z',
-        'Enregistrer la disposition', 'w', "run-shell '$(& $run '-Save')'")
+        'Enregistrer la disposition', 'w', "run-shell '$(& $run '-Save')'",
+        '', '', '',
+        'Équipe : répartir une demande en tâches', 't', "run-shell '$(& $run '-Team')'")
     & psmux -L $Sock bind-key -T prefix g display-menu @menu *> $null
-    & psmux -L $Sock bind-key -n MouseDown3Pane select-pane -t '=' '\;' display-menu @menu *> $null
+    # (pas d'enchaînement « select-pane \; display-menu » ici : psmux coupe la commande au « \; » et ouvrait le menu
+    #  immédiatement, au lancement — menu qui avalait ensuite les touches envoyées aux panneaux)
+    & psmux -L $Sock bind-key -n MouseDown3Pane display-menu @menu *> $null
 }
 
 function Enter-Flow([string]$s) {
@@ -629,11 +792,11 @@ function Show-Frame($lines) {
     Clear-Zones; Hint-Zones $lines
 }
 
-function Pick-Item([string]$title, $items, [scriptblock]$label, [scriptblock]$detail) {
+function Pick-Item([string]$title, $items, [scriptblock]$label, [scriptblock]$detail, [int]$start = 0) {
     # liste au clavier : renvoie l'index choisi, ou -1 si annulé
     $items = @($items)
     if (-not $items.Count) { return -1 }
-    $i = 0
+    $i = [Math]::Max(0, [Math]::Min($start, $items.Count - 1))
     [Console]::Write("$e[?25l$e[2J")
     while ($true) {
         $L = [Collections.Generic.List[string]]::new()
@@ -791,6 +954,16 @@ function Invoke-Capture {
 
 # ───────────────────────── gestion des profils ─────────────────────────
 function Invoke-NewProfile {
+    $Presets = @($Presets)
+    $en = @($Accounts | Where-Object { $_.Enabled })
+    if ($en.Count -ge 3) {
+        # un panneau Claude par compte activé, côte à côte
+        $w = [int][Math]::Floor(76 / $en.Count)
+        $cl = @(for ($q = 0; $q -lt $en.Count; $q++) { [ordered]@{ role = 'claude'; account = $en[$q].Id; width = $w; args = '--teammate-mode tmux'; focus = ($q -eq 0) } })
+        $rows = @([ordered]@{ height = 75; panes = @([ordered]@{ role = 'monitor'; width = 24 }) + $cl },
+                  [ordered]@{ height = 25; panes = @([ordered]@{ role = 'office'; width = 50 }, [ordered]@{ role = 'shell'; width = 50 }) })
+        $Presets += [pscustomobject]@{ Name = "Un Claude par compte — $($en.Count) comptes"; Desc = "moniteur partagé + $($en.Count) Claude côte à côte, Bureau et terminal"; Rows = (ConvertTo-Json $rows -Depth 6 -Compress) }
+    }
     $i = Pick-Item '◆ NOUVEAU PROFIL — disposition' $Presets { param($x) "$($x.Name)  $Dm$($x.Desc)$R" } {
         param($x)
         $tmp = [pscustomobject]@{ rows = ($x.Rows | ConvertFrom-Json) }
@@ -1266,13 +1439,17 @@ function Read-AcctLimits($a) {
 
 function Invoke-Accounts($profiles) {
     $script:Accounts = Get-Accounts
-    $i = Pick-Item '◆ COMPTES CLAUDE — Entrée : ouvrir Claude avec ce compte (connexion)' $Accounts {
+    $items = @($Accounts) + @([pscustomobject]@{ Add = $true })
+    $i = Pick-Item "◆ COMPTES CLAUDE — $($Accounts.Count) compte(s) · Entrée : connecter / ouvrir" $items {
         param($a)
+        if ($a.Add) { return "$Ok＋ ajouter un compte Claude…$R" }
         $st = if ($a.Logged) { "$Ok● connecté$R" } else { "$Warn○ pas encore connecté$R" }
         $off = if (-not $a.Enabled) { "  $Dm(désactivé)$R" } else { '' }
         "$(RgbA $a.Rgb)$($a.Label)$R $Dm[$($a.Id)]$R  $st$off"
     } {
         param($a)
+        if ($a.Add) { return @("$Dm Autant de comptes que tu veux : chacun a son dossier, ses identifiants et ses limites.$R",
+                               "$Dm Le profil Équipe répartit les tâches sur tous les comptes connectés.$R") }
         $lines = @("$Dm dossier$R  $($a.Home)$(if (-not $a.Dir) { "  $Dm(compte par défaut)$R" })")
         $lim = Read-AcctLimits $a
         if ($lim -and $lim.rate_limits) {
@@ -1282,12 +1459,21 @@ function Invoke-Accounts($profiles) {
         $used = @($profiles | Where-Object { $pp = $_; @(Claude-Panes $pp | Where-Object { (Acct-For $_ $pp).Id -eq $a.Id }).Count } | ForEach-Object { $_.name })
         $lines += "$Dm profils$R  $(if ($used) { $used -join ', ' } else { '(aucun)' })"
         $lines += ''
-        $lines += "$Dm Entrée ouvre une nouvelle fenêtre Claude avec ce compte : connecte-toi si Claude le demande$R"
-        $lines += "$Dm (ou tape /login), puis /exit. Les comptes se modifient dans config\accounts.json.$R"
+        $m = Acct-Mail $a
+        if ($m) { $lines += "$Dm connecté en tant que$R  $m" }
+        $lines += ''
+        if ($a.Logged) { $lines += "$Dm Entrée ouvre une nouvelle fenêtre Claude avec ce compte (/login pour en changer, /exit pour fermer).$R" }
+        else { $lines += "$Dm Entrée : se connecter ici même (lien à ouvrir dans le navigateur, puis code à coller).$R" }
+        $lines += "$Dm Les comptes se modifient dans config\accounts.json.$R"
         $lines
     }
     if ($i -lt 0) { return @{ Msg = '' } }
-    $a = $Accounts[$i]
+    $a = $items[$i]
+    if ($a.Add) { $a = Add-Account; if (-not $a) { return @{ Msg = "$Dm ajout annulé$R" } } }
+    if (-not $a.Logged) {
+        $ok = Connect-Account $a
+        return @{ Msg = $(if ($ok) { "$Ok✓ « $($a.Label) » est connecté$R" } else { "$Warn○ « $($a.Label) » n'est pas encore connecté (C pour réessayer)$R" }) }
+    }
     Start-AccountLogin $a
     @{ Msg = "$Info↗ Claude ouvert avec « $($a.Label) » dans une nouvelle fenêtre — l'état se met à jour tout seul$R" }
 }
@@ -1403,6 +1589,7 @@ $HelpLines = @(
     (Key '?' 'cette aide')
     ''
     "$Dm Dans une session :$R $(Key 'Ctrl+B D' 'ou') $(Key 'Ctrl+B F' 'revenir ici')"
+    "   $(Key 'Ctrl+B T' 'Équipe : répartir une demande en tâches sur les comptes')"
     "   $(Key 'Alt+flèches' 'changer de panneau')   $(Key 'Alt+Z' 'agrandir le panneau')"
 )
 
@@ -1569,6 +1756,10 @@ function Show-Selector([string]$msg, [string]$selectId) {
         $prep = Prepare-Launch $p
         if ($prep.Asked) { & $redraw }
         if (-not $prep.P) { $U.Msg = $prep.Msg; return $null }
+        # plusieurs comptes : connecter ceux qui manquent avant de construire la session
+        $gate = Invoke-AccountGate $prep.P
+        if ($gate.Shown) { & $redraw; $U.Refresh = $true }
+        if (-not $gate.Go) { $U.Msg = "$Dm lancement annulé$R"; return $null }
         $prep.P
     }
     $sharedOnly = "$Dm(profil partagé : D pour en faire ta copie modifiable, P pour republier)$R"
@@ -1768,6 +1959,7 @@ function Show-Selector([string]$msg, [string]$selectId) {
 if ($InstallShortcut) { "Raccourci : $(Install-Shortcut)"; return }
 
 $Accounts = Get-Accounts
+if ($InstallSkills) { "Skills FLOW installés dans $(Install-AllSkills) compte(s) : $((Get-ChildItem -LiteralPath (Join-Path $Root 'skills') -Directory).Name -join ', ')"; return }
 if ($Login) {
     $a = $Accounts | Where-Object { $_.Id -eq $Login -or $_.Label -eq $Login } | Select-Object -First 1
     if (-not $a) { Write-Host "compte « $Login » introuvable dans $AcctFile (comptes : $(($Accounts.Id) -join ', '))" -ForegroundColor Red; return }
@@ -1797,6 +1989,7 @@ try {
         foreach ($kv in @(@('cwd', $dir), @('session', "flow-equipe-$slug"), @('name', "Équipe — $(Split-Path $dir -Leaf)"), @('Id', "equipe-$slug"), @('File', $null))) {
             $p | Add-Member -NotePropertyName $kv[0] -NotePropertyValue $kv[1] -Force
         }
+        if (-not $NoAttach -and -not (Invoke-AccountGate $p).Go) { return }
         $s = Start-FlowProfile $p
         if ($NoAttach) { "session prête : $s  (psmux -L $Sock attach -t $s)"; return }
         Enter-Flow $s
@@ -1808,6 +2001,7 @@ try {
         if (-not $p) { throw "profil « $Open » introuvable dans $ProfDir ni dans les bibliothèques partagées" }
         $p = (Prepare-Launch $p).P
         if (-not $p) { return }
+        if (-not $NoAttach -and -not (Invoke-AccountGate $p).Go) { return }
         $s = Start-FlowProfile $p
         Save-LastUsed $p.Id
         if ($NoAttach) { "session prête : $s  (psmux -L $Sock attach -t $s)"; return }

@@ -9,12 +9,16 @@
     Alt+Maj+flèches     déplacer le panneau actif
     Ctrl+B puis W       enregistrer la disposition dans le profil
     Ctrl+B puis G       menu « Agencer » (aussi au clic droit sur un panneau)
+    Ctrl+B puis T       fenêtre Équipe : une demande découpée en tâches, réparties sur les comptes Claude
+
+    -Team           ouvre (ou rejoint) la fenêtre Équipe de la session
 #>
 param(
     [string]$Sock = 'flow',
     [string]$Target,            # « session:fenêtre.panneau » du panneau actif (fourni par psmux)
     [ValidateSet('L', 'R', 'U', 'D', '')][string]$Move = '',
-    [switch]$Save
+    [switch]$Save,
+    [switch]$Team
 )
 $ErrorActionPreference = 'SilentlyContinue'
 function Say([string]$s) { & psmux -L $Sock display-message $s *> $null }
@@ -31,6 +35,35 @@ function Panes {
                 [pscustomobject]@{ I = [int]$f[0]; X = [int]$f[1]; Y = [int]$f[2]; W = [int]$f[3]; H = [int]$f[4]; Active = $f[5] -eq '1'; Spec = $(if ($f.Count -ge 7) { $f[6] } else { '' }) }
             }
         })
+}
+
+if ($Team) {
+    # un panneau Équipe existe déjà dans la session (profil Équipe, ou Ctrl+B T déjà fait) : y aller
+    foreach ($ln in (& psmux -L $Sock list-panes -s -t $sess -F '#{window_index}.#{pane_index}|#{@flow_spec}')) {
+        $f = "$ln" -split '\|', 2
+        if ($f.Count -eq 2 -and $f[1] -match '"role"\s*:\s*"team"') {
+            & psmux -L $Sock select-window -t "${sess}:$($f[0].Split('.')[0])" *> $null
+            & psmux -L $Sock select-pane -t "${sess}:$($f[0])" *> $null
+            return
+        }
+    }
+    $cwd = (& psmux -L $Sock display-message -t $sess -p '#{@flow_cwd}' | Select-Object -First 1)
+    $accs = (& psmux -L $Sock display-message -t $sess -p '#{@flow_accounts}' | Select-Object -First 1)
+    if (-not $cwd -or -not (Test-Path -LiteralPath $cwd -PathType Container)) { Say 'FLOW : dossier du projet inconnu pour cette session (relance le profil)'; return }
+    $q = { param($x) "'" + ("$x" -replace "'", "''") + "'" }
+    & psmux -L $Sock new-window -t $sess -n dispatch -c $cwd *> $null
+    $tgt = "${sess}:dispatch.0"
+    for ($k = 0; $k -lt 60; $k++) {
+        if (((& psmux -L $Sock capture-pane -p -t $tgt 2>$null) -join '').Trim()) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    & psmux -L $Sock set -p -t $tgt '@flow_role' '⚑ équipe' *> $null
+    & psmux -L $Sock set -p -t $tgt '@flow_base' '⚑ équipe' *> $null
+    & psmux -L $Sock set -p -t $tgt '@flow_spec' '{"role":"team"}' *> $null
+    $cmd = "Clear-Host; pwsh -NoProfile -File $(& $q (Join-Path $PSScriptRoot 'flow-team.ps1')) -Repo $(& $q $cwd) -Sock $Sock -Session $(& $q $sess) -Accounts $(& $q $accs)"
+    & psmux -L $Sock send-keys -t $tgt -l $cmd *> $null
+    & psmux -L $Sock send-keys -t $tgt Enter *> $null
+    return
 }
 
 if ($Move) {

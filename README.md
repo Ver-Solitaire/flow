@@ -80,6 +80,7 @@ Les panneaux gardent leur rôle (Claude et son compte, moniteur, Bureau, équipe
 | `Ctrl+B` `D` ou `Ctrl+B` `F` | revenir au sélecteur (la session continue de tourner) |
 | `Alt`+flèches | changer de panneau |
 | `Alt+Z` | agrandir / rétablir le panneau courant |
+| `Ctrl+B` `T` | fenêtre **Équipe** dans n'importe quel profil (Duo, Standard…) : une demande découpée en tâches, réparties sur les comptes Claude (aussi dans le menu `Ctrl+B` `G`) |
 
 Chaque panneau affiche son rôle dans sa bordure (« ✦ claude », « ◉ moniteur »…). Pour les panneaux Claude,
 le moniteur y ajoute l'état en direct : `● travaille`, `✓ à toi` (bordure **verte** : Claude a fini et attend ta réponse),
@@ -239,13 +240,24 @@ Profil **Équipe — multi-comptes** (`profiles\equipe.json`) : à gauche la fen
 1. **Demande** : tu écris ton prompt (Entrée = nouvelle ligne, **F5** ou **Ctrl+D** = envoyer).
 2. **Plan** : un Claude planificateur (compte le moins chargé, lecture seule) explore le projet et propose
    des tâches : fichiers attribués, dépendances, critères de fin, plus un *brief* commun (contexte, conventions,
-   décisions partagées). Tu peux changer le compte d'une tâche (**Tab**), modifier le plan (**E**),
-   demander un autre découpage (**R**), puis lancer (**Entrée**).
+   décisions partagées). Les tâches sont réparties entre les comptes **connectés** (le moins chargé d'abord).
+   Tu peux changer le compte d'une tâche (**Tab**), refaire la répartition (**A**), connecter un compte
+   manquant sans quitter l'écran (**C**, ou **F4** depuis l'écran de demande), modifier le plan (**E**),
+   demander un autre découpage (**R**), puis lancer (**Entrée**). Une tâche confiée à un compte non connecté
+   bloque le lancement tant qu'elle n'est pas réattribuée ou le compte connecté.
 3. **Ouvriers** : chaque tâche part dans un vrai Claude interactif, dans la fenêtre psmux « equipe »
    (`Ctrl+B 2` ; `Ctrl+B 1` pour revenir). Chacun a **sa copie du projet** (git worktree, branche
    `flow/<id>/<tâche>`) : même code de départ, mêmes `CLAUDE.md` / réglages, aucun mélange possible.
    Une tâche qui dépend d'une autre démarre de sa branche, une fois celle-ci finie.
    Bordure / tableau : `● travaille`, `✋ attend ta réponse` (+ notification), `✓ terminée`.
+   **Synchronisation** : FLOW tient à jour un tableau partagé (`TABLEAU.md` : qui fait quoi, ce qui est fini,
+   où lire le travail des autres). Un ouvrier qui prend une décision touchant les autres l'écrit dans
+   `annonces\<tâche>.md` : FLOW la relaie aussitôt dans les panneaux des autres ouvriers, comme la fin de chaque tâche.
+   **Relecture croisée** : dès qu'un ouvrier a fini, un Claude d'un **autre compte** relit son travail (diff,
+   fiche, brief, raccord avec les autres tâches). S'il trouve un problème bloquant ou important, il est renvoyé
+   à l'ouvrier, qui corrige et resoumet (2 relectures au plus par tâche ; `relectures\<tâche>.md`). Une tâche
+   n'est « terminée » — et les tâches qui en dépendent ne démarrent — qu'une fois relue. **V** active ou coupe
+   la relecture (écran du plan ou du suivi) ; `"review": false` sur le panneau `team` la désactive par défaut.
 4. **Intégration** : les branches sont fusionnées dans une branche d'intégration (jamais directement chez toi).
    En cas de conflit : **C** lance un Claude intégrateur qui le résout. Les tests du projet sont lancés
    s'ils sont détectés (npm, pytest, cargo, go, dotnet) ou indiqués par `"testCommand"` sur le panneau.
@@ -302,6 +314,25 @@ livraison ; **E** édite le JSON. Le fichier peut être **commité** pour être 
 Options du panneau `team` dans un profil FLOW : `maxTasks`, `testCommand` (remplace les vérifications),
 `workerArgs` (par défaut `--permission-mode acceptEdits` : chaque ouvrier est isolé dans sa copie).
 
+## Skills : créer, reprendre, maintenir un projet, répartir les tâches
+
+FLOW livre quatre skills Claude Code (dossier `skills\`) et les installe dans **chaque compte** Claude
+(`<compte>\skills\`) à chaque lancement de profil : ils sont donc disponibles dans tous les projets, sans rien
+ajouter au projet lui-même. Claude les utilise de lui-même quand la demande s'y prête ; on peut aussi les
+appeler par leur nom (`/projet-creer`…).
+
+| Skill | Quand | Ce qu'il fait |
+|---|---|---|
+| `projet-creer` | « crée-moi un projet / une appli / un site… » | choisit des outils simples et répandus selon le type de projet (web, API, ligne de commande, script, mobile, jeu, données, sans code…), construit un socle qui tourne (structure, test, README, `CLAUDE.md`, Git), vérifie en le lançant |
+| `projet-reprendre` | « explique-moi ce projet », « fais le point » | explore sans rien modifier, fait tourner le projet et ses tests, écrit `CLAUDE.md`, rend un état des lieux classé par gravité |
+| `projet-maintenir` | « mets à jour », « fais le ménage », « prépare une version » | dépendances, sécurité, tests cassés, nettoyage, documentation, version — par petites étapes vérifiées, un commit chacune, rien de publié sans accord |
+| `taches-repartir` | « répartis le travail », « fais travailler les autres comptes » | Claude découpe la demande en tâches indépendantes et dépose le plan dans la fenêtre Équipe (`tools\flow-plan.ps1`) ; tu y vérifies comptes et modèles puis tu lances |
+
+- Modifier un skill : édite `skills\<nom>\SKILL.md`, il est recopié au prochain lancement
+  (ou tout de suite : `pwsh -File FLOW.ps1 -InstallSkills`).
+- Un skill du même nom que tu aurais créé toi-même dans un compte n'est jamais remplacé.
+- Dans la fenêtre Équipe, **F6** (écran de demande) affiche les plans en attente déposés par `taches-repartir`.
+
 ## Plusieurs comptes Claude
 
 Les comptes sont déclarés dans `config\accounts.json` :
@@ -316,8 +347,18 @@ Les comptes sont déclarés dans `config\accounts.json` :
 - `dir: null` = compte par défaut (`~\.claude`) ; sinon le dossier passé à Claude via `CLAUDE_CONFIG_DIR`
   (identifiants, réglages et historique de ce compte y sont rangés, séparés du compte principal).
   Garde ce dossier **hors** du dossier FLOW pour ne pas copier tes identifiants avec FLOW.
-- **Connexion** : dans le sélecteur, touche **C** → choisir le compte → Entrée. Une fenêtre Claude s'ouvre
-  avec ce compte : connecte-toi (ou `/login`), puis `/exit`. En ligne de commande : `pwsh -File FLOW.ps1 -Login second`.
+- **Connexion au lancement** : quand un profil utilise plusieurs comptes (Duo, Équipe…) et que l'un d'eux n'est
+  pas connecté, FLOW affiche la liste des comptes avant d'ouvrir la session. Entrée sur un compte lance sa
+  connexion **dans la même fenêtre** (`claude auth login` : lien à ouvrir, code à coller) ; dès que tous sont
+  connectés, le profil se lance. « Lancer maintenant » passe outre.
+  Si ton navigateur est déjà connecté à un autre compte, ouvre le lien dans une fenêtre privée.
+- **Autant de comptes que tu veux** : touche **C** → « ＋ ajouter un compte Claude… » (aussi proposé à l'écran de
+  lancement du profil Équipe). FLOW crée l'entrée dans `accounts.json` (dossier `~\.claude-compteN`) et enchaîne
+  sur la connexion. Le profil Équipe répartit les tâches sur tous les comptes connectés ; à partir de 3 comptes,
+  **N** (nouveau profil) propose la disposition « Un Claude par compte ».
+- **Connexion à tout moment** : dans le sélecteur, touche **C** → choisir le compte → Entrée.
+  En ligne de commande : `pwsh -File FLOW.ps1 -Login second`.
+- `"email": "moi@exemple.com"` (facultatif) sur un compte préremplit l'adresse sur la page de connexion.
 - **Choisir le compte** : `"account": "second"` sur un profil (tous ses panneaux) ou sur un panneau précis.
   Le profil **Duo — 2 comptes** (`profiles\duo.json`) ouvre un Claude par compte côte à côte.
 
