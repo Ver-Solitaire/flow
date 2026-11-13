@@ -125,6 +125,7 @@ function Find-Git {
 $GitExe = Find-Git
 . (Join-Path $PSScriptRoot 'flow-input.ps1')   # clavier + souris (clics)
 . (Join-Path $PSScriptRoot 'flow-common.ps1')  # écritures atomiques, Q, journal
+. (Join-Path $PSScriptRoot 'flow-claudemd.ps1')  # création d'un CLAUDE.md de départ
 $global:FlowLogFile = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\config\flow.log'))
 $GitId = @()
 $GitCode = 0
@@ -438,16 +439,21 @@ function Mode-Profile {
             foreach ($x in @(Chunks ([string]$Cfg.instructions) ($W - 8)) | Select-Object -First 6) { $L.Add("     $Dm$x$R") }
         }
         if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'CLAUDE.md'))) {
-            $L.Add(''); $L.Add("  $Warn⚠ pas de CLAUDE.md : les Claude connaîtront moins bien le projet (dans le projet : claude, puis /init).$R")
+            $L.Add(''); $L.Add("  $Warn⚠ pas de CLAUDE.md : les Claude connaîtront moins bien le projet — G pour en créer un modèle maintenant.$R")
         }
         $L.Add('')
-        $L.Add((Keys @('Entrée', 'valider', 'A', 'affiner avec Claude', 'L', 'mode de livraison', 'E', 'modifier (JSON)', 'D', 'redétecter', 'Échap', 'retour')))
+        $L.Add((Keys @('Entrée', 'valider', 'A', 'affiner avec Claude', 'L', 'mode de livraison', 'E', 'modifier (JSON)', 'D', 'redétecter', 'G', 'créer CLAUDE.md', 'Échap', 'retour')))
         $L.Add("  $Dm Enregistré dans .flow\config.json : tu peux le commiter pour le partager avec le projet.$R")
         if ($msg) { $L.Add("  $msg") }
         Show-Frame $L
         $k = (Read-KeyOrHint); $ch = "$($k.KeyChar)".ToLower()
         if ($k.Key -eq 'Enter') { Save-ProjectConfig; return 'home' }
         elseif ($k.Key -eq 'Escape') { if ($first) { Save-ProjectConfig }; return 'home' }
+        elseif ($ch -eq 'g') {
+            $f = New-ClaudeMd $RepoRoot
+            $msg = if ($f) { "$Ok✓ CLAUDE.md créé : $f — à relire et compléter$R" } else { "$Dm CLAUDE.md existe déjà$R" }
+            if ($f) { Write-FlowLog "CLAUDE.md créé dans $RepoRoot" }
+        }
         elseif ($ch -eq 'a') { $msg = Refine-WithClaude; Cls }
         elseif ($ch -eq 'd') { $keep = $Cfg.instructions; $script:Cfg = Detect-Project; $Cfg.instructions = $keep; $msg = "$Info↻ profil redétecté$R" }
         elseif ($ch -eq 'l') {

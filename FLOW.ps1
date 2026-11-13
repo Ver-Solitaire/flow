@@ -102,6 +102,7 @@ $Info = Rgb 120 200 255
 $Warn = Rgb 255 210 110
 . (Join-Path $PSScriptRoot 'tools\flow-input.ps1')   # clavier + souris (clics)
 . (Join-Path $PSScriptRoot 'tools\flow-common.ps1')  # écritures atomiques, Q, journal
+. (Join-Path $PSScriptRoot 'tools\flow-claudemd.ps1')  # création d'un CLAUDE.md de départ
 $global:FlowLogFile = Join-Path $PSScriptRoot 'config\flow.log'
 $FlowVersion = try { (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'VERSION') -TotalCount 1 -ErrorAction Stop).Trim() } catch { '' }
 $KeyPairs = [Collections.Generic.List[string]]::new()  # aides affichées (rendues cliquables)
@@ -285,6 +286,7 @@ function Invoke-ProjectPick {
         default { Set-Project $x.Dir }
     }
     [void](Invoke-AccountGate $null -ForProject)   # connexion des comptes dès le choix du projet
+    Offer-ClaudeMd
     "$Ok▣ projet : $(Split-Path $ProjectDir -Leaf)$R $Dm($ProjectDir)$R"
 }
 
@@ -422,6 +424,29 @@ function Add-Account {
     Write-JsonAtomic ([pscustomobject]@{ accounts = @($list) }) $AcctFile -Depth 5 -Backup
     $script:Accounts = Get-Accounts
     $Accounts | Where-Object { $_.Id -eq "compte$n" } | Select-Object -First 1
+}
+
+function Offer-ClaudeMd {
+    # propose de créer un CLAUDE.md quand le projet n'en a pas (la « mémoire » que lit chaque Claude au début d'une session)
+    if (-not $ProjectDir -or (Test-Path -LiteralPath (Join-Path $ProjectDir 'CLAUDE.md'))) { return }
+    $decl = Join-Path $Root 'config\claudemd-refuse.json'
+    $refused = @(try { Get-Content -LiteralPath $decl -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json } catch { @() })
+    if ($refused -contains $ProjectDir) { return }
+    $choices = @('Oui : créer un modèle maintenant (gratuit, d''après ce qui est détecté dans le dossier)', 'Plus tard (je redemanderai la prochaine fois)', 'Non, pas pour ce projet')
+    $i = Pick-Item "◆ « $(Split-Path $ProjectDir -Leaf) » n'a pas de CLAUDE.md — le créer ?" $choices { param($x) $x } {
+        param($x)
+        @("$Dm CLAUDE.md est la mémoire du projet : chaque Claude (et chaque ouvrier d'une équipe) le lit au début de sa session.$R",
+          "$Dm Le modèle contient les commandes, l'organisation et les conventions détectées ; tu le compléteras ensuite.$R")
+    } 0
+    if ($i -eq 0) {
+        $f = New-ClaudeMd $ProjectDir
+        if ($f) {
+            Write-FlowLog "CLAUDE.md créé dans $ProjectDir"
+            Show-Frame @('', "   $Ok✓ CLAUDE.md créé : $f$R", '', "   $Dm Ouvre-le pour compléter les passages « (à compléter) » (ou demande à Claude de le faire).$R", '', "  $(Key 'Entrée' 'continuer')")
+            [void](Read-Action -Wait)
+        }
+    }
+    elseif ($i -eq 2) { Write-JsonAtomic @(@($refused) + $ProjectDir) $decl -Depth 3 }
 }
 
 function Invoke-RemoveAccount {
@@ -2156,7 +2181,7 @@ try {
     }
     $msg = ''
     # projet choisi (FLOW.exe ou -Project) : on s'assure tout de suite que les comptes sont connectés, avant même le choix du profil
-    if ($ProjectDir) { Enable-Mouse; [void](Invoke-AccountGate $null -ForProject); [Console]::Write("$R$e[2J$e[H") }
+    if ($ProjectDir) { Enable-Mouse; [void](Invoke-AccountGate $null -ForProject); Offer-ClaudeMd; [Console]::Write("$R$e[2J$e[H") }
     $last = (Get-State).last
     while ($true) {
         $p = Show-Selector $msg $last

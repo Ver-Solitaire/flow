@@ -23,3 +23,6 @@ config/flow.log.1
 
 # tests : modules téléchargés au besoin
 tests/.modules/
+
+# refus mémorisés (propres à chaque machine)
+config/claudemd-refuse.json
