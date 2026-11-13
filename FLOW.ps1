@@ -284,6 +284,7 @@ function Invoke-ProjectPick {
         }
         default { Set-Project $x.Dir }
     }
+    [void](Invoke-AccountGate $null -ForProject)   # connexion des comptes dès le choix du projet
     "$Ok▣ projet : $(Split-Path $ProjectDir -Leaf)$R $Dm($ProjectDir)$R"
 }
 
@@ -423,23 +424,30 @@ function Add-Account {
     $Accounts | Where-Object { $_.Id -eq "compte$n" } | Select-Object -First 1
 }
 
-function Invoke-AccountGate($p) {
-    # au lancement d'un profil à plusieurs comptes : connecter ceux qui ne le sont pas encore.
-    # renvoie @{ Go = lancer ? ; Shown = un écran a été affiché }
-    if (Test-Session (SessionName $p)) { return @{ Go = $true } }
+function Invoke-AccountGate($p, [switch]$ForProject) {
+    # connecter les comptes qui ne le sont pas encore. Deux moments :
+    #  - -ForProject : à la sélection du projet (tous les comptes activés ; signale aussi deux comptes qui ont la même adresse) ;
+    #  - sinon : au lancement d'un profil à plusieurs comptes (ceux dont le profil a besoin).
+    # renvoie @{ Go = continuer ? ; Shown = un écran a été affiché }
+    if (-not $ForProject -and (Test-Session (SessionName $p))) { return @{ Go = $true } }
     $shown = $false
     while ($true) {
         $script:Accounts = Get-Accounts
-        $need = @(Profile-Accounts $p)
+        $need = if ($ForProject) { @($Accounts | Where-Object { $_.Enabled }) } else { @(Profile-Accounts $p) }
         $missing = @($need | Where-Object { -not $_.Logged })
-        if ($need.Count -lt 2 -or -not $missing.Count) { return @{ Go = $true; Shown = $shown } }
+        $dupes = if ($ForProject) { @($need | Where-Object { $_.Logged -and $_.Dir -and (Dup-Of $_) }) } else { @() }
+        if ($ForProject) { if (-not $missing.Count -and -not $dupes.Count) { return @{ Go = $true; Shown = $shown } } }
+        elseif ($need.Count -lt 2 -or -not $missing.Count) { return @{ Go = $true; Shown = $shown } }
         $shown = $true
-        $team = Uses-Role $p 'team'
+        $team = $ForProject -or (Uses-Role $p 'team')
         $items = @($need) + @(if ($team) { [pscustomobject]@{ Add = $true } }) + @([pscustomobject]@{ Go = $true })
         $first = 0; for ($q = 0; $q -lt $need.Count; $q++) { if (-not $need[$q].Logged) { $first = $q; break } }
-        $i = Pick-Item "◆ COMPTES — « $($p.name) » utilise $($need.Count) comptes · $($missing.Count) à connecter" $items {
+        if (-not $missing.Count -and $dupes.Count) { $first = [Math]::Max(0, [array]::IndexOf($need, ($dupes | Where-Object { $_.Dir } | Select-Object -First 1))) }   # le compte à reconnecter est déjà sélectionné
+        $title = if ($ForProject) { "◆ COMPTES — projet « $(Split-Path $ProjectDir -Leaf) » · $(if ($missing.Count) { "$($missing.Count) compte(s) à connecter" } else { 'comptes à vérifier' })" }
+                 else { "◆ COMPTES — « $($p.name) » utilise $($need.Count) comptes · $($missing.Count) à connecter" }
+        $i = Pick-Item $title $items {
             param($x)
-            if ($x.Go) { return "$Info▶ lancer maintenant$R $Dm(sans $(($missing.Label) -join ', '))$R" }
+            if ($x.Go) { return "$Info▶ $(if ($ForProject) { 'continuer' } else { 'lancer maintenant' })$R $Dm$(if ($missing.Count) { "(sans $(($missing.Label) -join ', '))" } else { '(garder les comptes tels quels)' })$R" }
             if ($x.Add) { return "$Ok＋ ajouter un compte Claude…$R" }
             $st = if ($x.Logged) { $m = Acct-Mail $x; $dp = Dup-Of $x; "$Ok● connecté$R$(if ($m) { " $Dm$m$R" })$(if ($dp) { "  $Warn$B⚠ même adresse que $($dp.Label) — Entrée pour reconnecter$R" })" } else { "$Warn○ à connecter$R $Dm— Entrée$R" }
             "$(RgbA $x.Rgb)◆ $($x.Label)$R  $st"
@@ -453,7 +461,7 @@ function Invoke-AccountGate($p) {
             if ($x.Logged) { return @("$Dm dossier$R  $($x.Home)", "$Dm Entrée : reconnecter ce compte (pour en changer)$R") }
             @("$Dm dossier$R  $($x.Home)", "$Dm Entrée : se connecter ici même ; une fois tous les comptes connectés, le profil se lance.$R")
         } $first
-        if ($i -lt 0) { return @{ Go = $false; Shown = $true } }
+        if ($i -lt 0) { return @{ Go = [bool]$ForProject; Shown = $true } }   # à la sélection du projet, Échap ne bloque rien
         $x = $items[$i]
         if ($x.Go) { return @{ Go = $true; Shown = $true } }
         if ($x.Add) { $x = Add-Account; if (-not $x) { continue } }
@@ -2104,6 +2112,8 @@ try {
         return
     }
     $msg = ''
+    # projet choisi (FLOW.exe ou -Project) : on s'assure tout de suite que les comptes sont connectés, avant même le choix du profil
+    if ($ProjectDir) { Enable-Mouse; [void](Invoke-AccountGate $null -ForProject); [Console]::Write("$R$e[2J$e[H") }
     $last = (Get-State).last
     while ($true) {
         $p = Show-Selector $msg $last
