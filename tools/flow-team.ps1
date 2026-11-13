@@ -2175,6 +2175,53 @@ function Deliver-Run([string]$dlv, [string]$target, [string]$cur) {
     @{ Ok = $false; Info = "$Err✗ mode de livraison inconnu : $dlv$R" }
 }
 
+function Changed-Files([string]$dir, [string]$base) {
+    @(Git-In $dir @('-c', 'core.quotepath=false', 'diff', '--name-only', "$base..HEAD") | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+}
+
+# visionneuse : lire un fichier produit sans quitter la fenêtre (↑↓ PgUp PgDn, ←→ fichier suivant, O ouvrir dans son application)
+function Show-Viewer([string]$root, [string[]]$files) {
+    $n = 0; $top = 0; $cache = $null; $binRx = '\.(png|jpe?g|gif|webp|ico|pdf|zip|exe|dll|docx?|xlsx?|pptx?|mp[34]|woff2?)$'
+    Cls
+    while ($true) {
+        $f = $files[$n]; $path = Join-Path $root $f
+        $W = [Math]::Max(40, (ConW) - 1); $H = ConH
+        if ($null -eq $cache) {
+            $raw = if (-not (Test-Path -LiteralPath $path)) { @('(ce fichier est supprimé dans cette version)') }
+                   elseif ($f -match $binRx) { @('(fichier non texte : appuie sur O pour l''ouvrir dans son application)') }
+                   else { @(Get-Content -LiteralPath $path -Encoding utf8 -ErrorAction SilentlyContinue) }
+            $cache = @(); foreach ($ln in $raw) { $cache += @(Chunks ("$ln" -replace "`t", '    ') ($W - 6)) }
+            $top = 0
+        }
+        $room = [Math]::Max(3, $H - 9)
+        $top = [Math]::Max(0, [Math]::Min($top, [Math]::Max(0, $cache.Count - $room)))
+        $L = [Collections.Generic.List[string]]::new()
+        $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — résultat' 0.1)   $B$f$R  $Dm($($n + 1)/$($files.Count))$R")
+        $L.Add("  $Dm$path$R")
+        $bc = Rgb 70 74 96
+        $L.Add("  $bc$('─' * [Math]::Max(10, $W - 4))$R")
+        foreach ($x in @($cache | Select-Object -Skip $top -First $room)) { $L.Add("   $x") }
+        $L.Add("  $bc$('─' * [Math]::Max(10, $W - 4))$R")
+        $to = [Math]::Min($cache.Count, $top + $room)
+        $L.Add("  $Dm lignes $([Math]::Min($cache.Count, $top + 1))–$to sur $($cache.Count)$R")
+        $L.Add((Keys @('↑↓', 'lire', 'PgUp/PgDn', 'page', '←→', 'autre fichier', 'O', 'ouvrir dans son application', 'Échap', 'retour')))
+        Show-Frame $L
+        $k = Read-KeyOrHint; $ch = "$($k.KeyChar)".ToLower()
+        switch ($k.Key) {
+            'Escape'     { return }
+            'UpArrow'    { $top-- }
+            'DownArrow'  { $top++ }
+            'PageUp'     { $top -= $room }
+            'PageDown'   { $top += $room }
+            'Home'       { $top = 0 }
+            'End'        { $top = $cache.Count }
+            'RightArrow' { if ($files.Count -gt 1) { $n = ($n + 1) % $files.Count; $cache = $null; Cls } }
+            'LeftArrow'  { if ($files.Count -gt 1) { $n = ($n - 1 + $files.Count) % $files.Count; $cache = $null; Cls } }
+            default      { if ($ch -eq 'o' -and (Test-Path -LiteralPath $path)) { try { Start-Process -FilePath $path } catch {} } }
+        }
+    }
+}
+
 function Mode-Review {
     $iw = Int-Dir; $ib = Int-Branch; $msg = ''
     Cls
@@ -2184,7 +2231,8 @@ function Mode-Review {
         $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — à valider' 0.1)   $Dm$($State.id)$R")
         $L.Add("  $B$($State.summary)$R")
         $L.Add((Stepper 5))
-        $L.Add((Now 'le travail est prêt. F = le mettre dans ton projet · D = le relire · N = nouvelle demande (celui-ci reste à valider)')); $L.Add('')
+        $L.Add((Now 'V = LIRE le résultat · F = le mettre dans ton projet · N = nouvelle demande (celui-ci reste à valider)')); $L.Add('')
+        $changed = @(Changed-Files $iw $State.base)
         $merged = @($State.integration.merged); $skipped = @($State.integration.skipped)
         $L.Add("  $Dm branche d'intégration$R $ib   $Dm dossier$R $iw")
         $L.Add("  $Ok✓ fusionnées : $(if ($merged) { $merged -join ', ' } else { 'aucune' })$R$(if ($skipped) { "   $Warn laissées de côté : $($skipped -join ', ')$R" })")
@@ -2197,6 +2245,7 @@ function Mode-Review {
             }
         } else { $L.Add("  $Dm(aucune vérification configurée — F2 dans l'accueil pour le profil du projet)$R") }
         $L.Add('')
+        if ($changed.Count) { $L.Add("  $B$Teal Résultat$R  $Dm(V pour le lire ici)$R"); foreach ($cf in ($changed | Select-Object -First 6)) { $L.Add("    $Teal📄 $cf$R") }; if ($changed.Count -gt 6) { $L.Add("    $Dm… et $($changed.Count - 6) autre(s)$R") }; $L.Add('') }
         $L.Add("  $B Changements$R")
         foreach ($x in @(Git-In $iw @('diff', '--stat', "$($State.base)..HEAD")) | Select-Object -Last 10) { $L.Add("    $Dm$x$R") }
         $L.Add('')
@@ -2217,11 +2266,14 @@ function Mode-Review {
             default  { "fusionner dans $target" }
         }
         $L.Add("  $Dm commit final : « $(Final-Title) »$R")
-        $L.Add((Keys @('F', $fLabel, 'L', 'autre livraison', 'D', 'diff', 'O', 'terminal', 'J', 'jeter', 'N', 'nouvelle demande', 'Échap', 'accueil')))
+        $L.Add((Keys @('V', 'lire le résultat', 'F', $fLabel, 'L', 'autre livraison', 'D', 'diff', 'O', 'terminal', 'J', 'jeter', 'N', 'nouvelle demande', 'Échap', 'accueil')))
         if ($msg) { $L.Add("  $msg") }
         Show-Frame $L
         $k = (Read-KeyOrHint); $ch = "$($k.KeyChar)".ToLower()
         if ($k.Key -eq 'Escape' -or $ch -eq 'n') { return 'home' }   # retour à l'accueil de l'équipe : nouvelle demande (N) ; celle-ci reste à valider
+        elseif ($ch -eq 'v') {
+            if ($changed.Count) { Show-Viewer $iw $changed; Cls } else { $msg = "$Warn aucun fichier produit par cette équipe$R" }
+        }
         elseif ($ch -eq 'd') {
             $c = "Set-Location -LiteralPath $(Q $iw); $(Git-Env)git diff $($State.base)..HEAD"
             Open-Pane '_diff' "⚑ diff · $($State.id)" $c $iw; [void](Focus-Pane '_diff')
@@ -2268,7 +2320,7 @@ function Mode-Review {
             $res = Deliver-Run $dlv $target $cur
             if ($res.Ok) {
                 $State.status = 'merged'; $State.integration.delivered = $res.Info; Save-State
-                [void](Message-Screen '⚑ ÉQUIPE — livré' (@("$Ok✓ $($res.Info)$R", "$Dm Copies de travail et branches temporaires supprimées ; l'historique reste dans $RunDir.$R") + @(Archive-Lines $res.Archive)) @('Entrée', 'nouvelle demande'))
+                [void](Message-Screen '⚑ ÉQUIPE — livré' (@("$Ok✓ $($res.Info)$R", '', "$B Où trouver le résultat :$R") + @($changed | Select-Object -First 6 | ForEach-Object { "   $Teal📄 $(Join-Path $RepoRoot $_)$R" }) + @('', "$Dm Copies de travail et branches temporaires supprimées ; l'historique reste dans $RunDir.$R") + @(Archive-Lines $res.Archive)) @('Entrée', 'nouvelle demande'))
                 return 'home'
             }
             $msg = $res.Info
