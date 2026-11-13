@@ -21,7 +21,8 @@ param(
     [string]$TestCommand,         # commande de test lancée sur la branche d'intégration (sinon détectée)
     [string]$WorkerArgs = '--permission-mode acceptEdits',  # chaque ouvrier est isolé dans son worktree
     [switch]$NoReview,            # sans relecture croisée (par défaut : chaque tâche finie est relue par un autre compte)
-    [int]$MaxReviews = 2          # nombre maximal de relectures par tâche
+    [int]$MaxReviews = 2,         # nombre maximal de relectures par tâche
+    [switch]$LoadOnly             # charge les fonctions sans lancer l'écran (tests)
 )
 
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -124,6 +125,7 @@ function Find-Git {
 }
 $GitExe = Find-Git
 . (Join-Path $PSScriptRoot 'flow-input.ps1')   # clavier + souris (clics)
+. (Join-Path $PSScriptRoot 'flow-common.ps1')  # écritures atomiques
 $GitId = @()
 $GitCode = 0
 function Git-In([string]$dir, [string[]]$a) {
@@ -225,9 +227,9 @@ function Resolve-Repo {
     [IO.Path]::GetFullPath(($top | Select-Object -First 1).Trim())
 }
 function Has-Commit { [void](Git-In $RepoRoot @('rev-parse', '--verify', '-q', 'HEAD')); $GitCode -eq 0 }
-function Dirty-Files {
-    # modifications non commitées du projet (hors .flow\ : profil et tableau de l'outil)
-    @(Git-In $RepoRoot @('status', '--porcelain') | Where-Object { $_ -and $_ -notmatch '^\S*\s+"?\.flow/' })
+function Dirty-Files([switch]$TrackedOnly) {
+    # modifications non commitées du projet (hors .flow\ : profil et tableau de l'outil) ; -TrackedOnly : sans les fichiers non suivis
+    @(Git-In $RepoRoot @('status', '--porcelain') | Where-Object { $_ -and $_ -notmatch '^\S*\s+"?\.flow/' -and (-not $TrackedOnly -or $_ -notmatch '^\?\?') })
 }
 function Exclude-Flow {
     # .flow\runs\ (tableau des équipes) n'est jamais commité ; .flow\config.json (profil du projet) peut l'être
@@ -347,7 +349,7 @@ function Load-ProjectConfig {
 
 function Save-ProjectConfig {
     New-Item -ItemType Directory -Force (Split-Path (Cfg-Path)) | Out-Null
-    ($Cfg | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Cfg-Path) -Encoding utf8
+    Write-JsonAtomic $Cfg (Cfg-Path) -Depth 8 -Backup
 }
 
 function Deliver-Label([string]$d) {
@@ -466,7 +468,7 @@ function Proj-Key([string]$p) { ([IO.Path]::GetFullPath($p).TrimEnd('\', '/')) -
 
 function Save-State {
     $State.updated = (Get-Date).ToString('o')
-    ($State | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath (Join-Path $RunDir 'state.json') -Encoding utf8
+    Write-JsonAtomic $State (Join-Path $RunDir 'state.json') -Depth 12
 }
 function Use-Run($st) {
     # équipes créées avant l'ajout des modèles / du conseiller : champs manquants complétés
@@ -1593,7 +1595,7 @@ function Commits-Of($t) {
 }
 
 function Mode-Run {
-    $sel = 0; $lastPoll = [datetime]::MinValue; $msg = ''; $armX = $false
+    $sel = 0; $lastPoll = [datetime]::MinValue; $msg = ''
     $prevLive = @{}; foreach ($t in @($State.tasks)) { $prevLive[$t.id] = $t.live }
     $commits = @{}   # nombre de commits par tâche (recalculé toutes les 2 s, pas à chaque image)
     $autoAdv = @{}   # dernier appel automatique du conseiller par tâche (au plus un toutes les 5 min)
@@ -1730,7 +1732,6 @@ function Mode-Run {
                 if ($q -eq $sel -or $act.Double) { $k = Fake-Key 'Enter' } else { $sel = $q; $msg = ''; continue }
             } else { $k = $act.K }
             $ch = "$($k.KeyChar)".ToLower()
-            if ($ch -ne 'x') { $armX = $false }
             $t = $ts[$sel]
             if ($k.Key -eq 'UpArrow') { $sel = ($sel - 1 + $ts.Count) % $ts.Count; $msg = '' }
             elseif ($k.Key -eq 'DownArrow') { $sel = ($sel + 1) % $ts.Count; $msg = '' }
@@ -1773,8 +1774,9 @@ function Mode-Run {
                 return 'integrate'
             }
             elseif ($ch -eq 'x') {
-                if (-not $armX) { $armX = $true; $msg = "$Err⚠ X encore une fois pour abandonner l'équipe (copies et branches supprimées)$R" }
-                else { Cleanup-Run; $State.status = 'discarded'; Save-State; return 'home' }
+                $ok = Confirm-Discard '⚑ ÉQUIPE — abandonner l''équipe ?'
+                Cls
+                if ($ok) { $arch = @(Cleanup-Run -Abandon); $State.status = 'discarded'; Save-State; Show-Archive $arch; return 'home' }
             }
         }
     }
@@ -1864,8 +1866,23 @@ function Mode-Integrate {
             }
             return 'integrate'
         }
-        $merged += $cid; $State.integration.merged = $merged; $State.integration.conflict = ''; Save-State
-        $log.Add("$Ok✓ conflit de $cid résolu$R")
+        $tc = Task-ById $cid
+        [void](Git-In $iw @('merge-base', '--is-ancestor', (Task-Branch $tc), 'HEAD'))
+        if ($GitCode -eq 0) {
+            $merged += $cid; $State.integration.merged = $merged; $State.integration.conflict = ''; Save-State
+            $log.Add("$Ok✓ conflit de $cid résolu$R")
+        } else {
+            # aucune fusion en cours et la branche n'est pas dans l'intégration : fusion abandonnée ou refusée
+            $why = [string]$State.integration.conflictMsg
+            $k = Message-Screen '⚑ ÉQUIPE — fusion non terminée' @(
+                "La tâche $B$cid$R ($($tc.title)) n'est $B$Err PAS$R dans la branche d'intégration : la fusion a été abandonnée ou refusée.",
+                $(if ($why) { "$Dm$why$R" } else { '' }), '',
+                'Entrée / R = réessayer la fusion · A = laisser cette tâche de côté (son travail est conservé)') @('R', 'réessayer', 'A', 'laisser de côté', 'Échap', 'plus tard')
+            if ($k.Key -eq 'Escape') { return 'quit' }
+            if ("$($k.KeyChar)".ToLower() -eq 'a') { $skipped += $cid; $State.integration.skipped = $skipped }
+            $State.integration.conflict = ''; Save-State
+            return 'integrate'
+        }
     }
 
     foreach ($t in (Topo @($State.tasks))) {
@@ -1875,13 +1892,22 @@ function Mode-Integrate {
         if ($t.worktree -and (Test-Path -LiteralPath $t.worktree)) {
             $d = @(Git-In $t.worktree @('status', '--porcelain') | Where-Object { $_ })
             if ($d.Count) {
-                [void](Git-In $t.worktree @('add', '-A')); [void](Git-In $t.worktree @('commit', '-q', '-m', "tâche $($t.id) : changements non commités"))
+                $oa = Git-In $t.worktree @('add', '-A'); $c1 = $GitCode
+                $oc = Git-In $t.worktree @('commit', '-q', '--no-verify', '-m', "tâche $($t.id) : changements non commités"); $c2 = $GitCode
+                if ($c1 -ne 0 -or $c2 -ne 0) {
+                    # ne pas fusionner sans ses changements : la tâche est laissée de côté et sa copie reste intacte
+                    $skipped += $t.id; $State.integration.skipped = $skipped; Save-State
+                    $why = (@($(if ($c1 -ne 0) { $oa } else { $oc })) | Where-Object { "$_".Trim() } | Select-Object -Last 1)
+                    $log.Add("$Err✗ $($t.id) : le commit automatique de ses changements a échoué ($why) : tâche laissée de côté, sa copie est conservée : $($t.worktree)$R")
+                    continue
+                }
                 $log.Add("$Warn• $($t.id) : $($d.Count) changement(s) non commité(s) ajouté(s)$R")
             }
         }
         $log.Add("$Info→ fusion de $($t.id) — $($t.title)$R"); Show-Log
-        [void](Git-In $iw @('merge', '--no-ff', '--no-edit', '-m', "flow: tâche $($t.id) — $($t.title)", (Task-Branch $t)))
+        $om = Git-In $iw @('merge', '--no-ff', '--no-edit', '-m', "flow: tâche $($t.id) — $($t.title)", (Task-Branch $t))
         if ($GitCode -ne 0) {
+            $State.integration | Add-Member -NotePropertyName conflictMsg -NotePropertyValue ((@($om) | Where-Object { "$_".Trim() } | Select-Object -Last 2) -join ' / ') -Force
             $State.integration.conflict = $t.id; $State.integration.merged = $merged; $State.integration.skipped = $skipped; Save-State
             Notify "⚠ Conflit de fusion (tâche $($t.id))" 'Ouvre la fenêtre Équipe pour le résoudre.'
             return 'integrate'
@@ -1890,6 +1916,13 @@ function Mode-Integrate {
         $State.integration.merged = $merged; $State.integration.skipped = $skipped; Save-State
     }
 
+    # contrôle : toute tâche annoncée fusionnée est bien dans la branche d'intégration
+    $gone = @($merged | Where-Object { [void](Git-In $iw @('merge-base', '--is-ancestor', (Task-Branch (Task-ById $_)), 'HEAD')); $GitCode -ne 0 })
+    if ($gone.Count) {
+        $merged = @($merged | Where-Object { $_ -notin $gone }); $State.integration.merged = $merged
+        $State.integration.checks = @(); Save-State
+        return 'integrate'
+    }
     # vérifications du projet (lint, types, tests, build…) sur la branche d'intégration
     if (-not @($State.integration.checks).Count) { $State.integration.checks = @(Run-Checks $iw) }
     $State.status = 'review'; Save-State
@@ -1897,16 +1930,89 @@ function Mode-Integrate {
     'review'
 }
 
-function Cleanup-Run([switch]$KeepIntegration) {
+function Archive-Ref($t) { "refs/flow-archive/$($State.id)/$($t.id)" }
+
+function Backup-Task($t) {
+    # met à l'abri les fichiers non commités d'une tâche (commit de sauvegarde). Renvoie $true si sa copie peut être supprimée
+    # sans rien perdre (propre, ou sauvegardée) ; $false si la sauvegarde a échoué : la copie doit alors être gardée.
+    if (-not ($t.worktree -and (Test-Path -LiteralPath $t.worktree))) { return $true }
+    $d = @(Git-In $t.worktree @('status', '--porcelain') | Where-Object { $_ })
+    if (-not $d.Count) { return $true }
+    [void](Git-In $t.worktree @('add', '-A'))
+    if ($GitCode -ne 0) { return $false }
+    [void](Git-In $t.worktree @('commit', '-q', '--no-verify', '-m', "flow: sauvegarde de la tâche $($t.id) avant nettoyage"))
+    $GitCode -eq 0
+}
+
+function Cleanup-Run([switch]$KeepIntegration, [switch]$Abandon) {
+    # Supprime les copies de travail et les branches de l'équipe SANS RIEN PERDRE : le travail non commité est sauvegardé,
+    # et la branche de toute tâche qui n'est pas dans l'intégration (ou de toute l'équipe si on abandonne) est conservée
+    # sous refs/flow-archive/<équipe>/<tâche>. Renvoie des lignes d'information pour l'utilisateur.
+    $info = [Collections.Generic.List[string]]::new()
     Kill-TeamPanes
+    $ib = Int-Branch
+    [void](Git-In $RepoRoot @('rev-parse', '--verify', '-q', "refs/heads/$ib")); $ibOk = $GitCode -eq 0
     foreach ($t in @($State.tasks)) {
+        $br = Task-Branch $t
+        [void](Git-In $RepoRoot @('rev-parse', '--verify', '-q', "refs/heads/$br")); $brOk = $GitCode -eq 0
+        if (-not (Backup-Task $t)) { $info.Add("la copie de $($t.id) est conservée (sa sauvegarde a échoué) : $($t.worktree)"); continue }
+        if ($brOk) {
+            $inInt = $false
+            if ($ibOk -and -not $Abandon) { [void](Git-In $RepoRoot @('merge-base', '--is-ancestor', $br, $ib)); $inInt = $GitCode -eq 0 }
+            if (-not $inInt) {
+                [void](Git-In $RepoRoot @('update-ref', (Archive-Ref $t), $br))
+                if ($GitCode -ne 0) { $info.Add("la branche de $($t.id) est conservée ($br) : l'archivage a échoué"); continue }
+                $info.Add("tâche $($t.id) ($($t.title)) mise de côté : $(Archive-Ref $t)")
+            }
+        }
         if ($t.worktree -and (Test-Path -LiteralPath $t.worktree)) { [void](Git-In $RepoRoot @('worktree', 'remove', '--force', $t.worktree)) }
-        [void](Git-In $RepoRoot @('branch', '-D', (Task-Branch $t)))
+        if ($brOk) { [void](Git-In $RepoRoot @('branch', '-D', $br)) }
     }
     if (Test-Path -LiteralPath (Int-Dir)) { [void](Git-In $RepoRoot @('worktree', 'remove', '--force', (Int-Dir))) }
-    if (-not $KeepIntegration) { [void](Git-In $RepoRoot @('branch', '-D', (Int-Branch))) }
+    if (-not $KeepIntegration -and $ibOk) {
+        if ($Abandon) {
+            [void](Git-In $RepoRoot @('update-ref', "refs/flow-archive/$($State.id)/_integration", $ib))
+            if ($GitCode -eq 0) { $info.Add("assemblage mis de côté : refs/flow-archive/$($State.id)/_integration") }
+        }
+        [void](Git-In $RepoRoot @('branch', '-D', $ib))
+    }
     [void](Git-In $RepoRoot @('worktree', 'prune'))
     if ((Test-Path -LiteralPath $WtRoot) -and -not (Get-ChildItem -LiteralPath $WtRoot -Force)) { Remove-Item -LiteralPath $WtRoot }
+    # ménage des archives de plus de 60 jours
+    $old = [DateTimeOffset]::UtcNow.AddDays(-60).ToUnixTimeSeconds()
+    foreach ($l in @(Git-In $RepoRoot @('for-each-ref', '--format=%(refname) %(committerdate:unix)', 'refs/flow-archive/'))) {
+        $p = "$l" -split ' '
+        if ($p.Count -eq 2 -and $p[1] -match '^\d+$' -and [long]$p[1] -lt $old) { [void](Git-In $RepoRoot @('update-ref', '-d', $p[0])) }
+    }
+    $info
+}
+
+function Archive-Lines($lines) {
+    # texte à montrer après un nettoyage qui a mis du travail de côté
+    $l = @($lines | Where-Object { $_ })
+    if (-not $l.Count) { return @() }
+    @('', "$Warn Travail mis de côté (rien n'est perdu) :$R") + @($l | ForEach-Object { "  • $_" }) +
+        @('', "$Dm Pour retrouver une tâche : git branch <nom> refs/flow-archive/$($State.id)/<lettre de la tâche>$R")
+}
+
+function Show-Archive($lines) {
+    $l = @(Archive-Lines $lines)
+    if (-not $l.Count) { return }
+    [void](Message-Screen '⚑ ÉQUIPE — travail mis de côté' $l @('Entrée', 'continuer'))
+    Cls
+}
+
+function Confirm-Discard([string]$title) {
+    # abandon de l'équipe : on chiffre ce qui part, et on demande une touche volontaire (pas une double frappe)
+    $rows = foreach ($t in @($State.tasks)) {
+        if (-not ($t.worktree -and (Test-Path -LiteralPath $t.worktree))) { continue }
+        $dirty = @(Git-In $t.worktree @('status', '--porcelain') | Where-Object { $_ }).Count
+        "  $B$($t.id)$R $($t.title) : $(Commits-Of $t) commit(s), $dirty fichier(s) non commité(s)"
+    }
+    $k = Message-Screen $title (@('L''équipe va être retirée de ton projet (copies de travail et branches temporaires) :', '') + @($rows) + @('',
+            "$Ok Rien n'est détruit : chaque tâche, même non terminée, est mise de côté dans Git (refs/flow-archive/…) et je te dirai comment la retrouver.$R",
+            "$Dm Ton dossier de projet n'est pas touché.$R")) @('O', 'abandonner l''équipe', 'Échap', 'annuler')
+    "$($k.KeyChar)".ToLower() -eq 'o'
 }
 
 function Deliver-Run([string]$dlv, [string]$target, [string]$cur) {
@@ -1915,7 +2021,7 @@ function Deliver-Run([string]$dlv, [string]$target, [string]$cur) {
     switch ($dlv) {
         { $_ -in 'merge', 'squash' } {
             if ($cur -ne $target) { return @{ Ok = $false; Info = "$Err✗ ton dossier est sur « $cur » et la cible est « $target » : bascule sur $target (git switch $target), puis F$R" } }
-            $dirty = Dirty-Files
+            $dirty = Dirty-Files -TrackedOnly
             if ($dirty.Count) { return @{ Ok = $false; Info = "$Err✗ ton dossier a $($dirty.Count) modification(s) non commitée(s) : commit-les ou mets-les de côté (git stash), puis F$R" } }
             if ($dlv -eq 'merge') {
                 [void](Git-In $RepoRoot @('merge', '--no-ff', '-m', $title, '-m', $body, $ib))
@@ -1926,8 +2032,8 @@ function Deliver-Run([string]$dlv, [string]$target, [string]$cur) {
                 [void](Git-In $RepoRoot @('commit', '-q', '-m', $title, '-m', $body))
                 if ($GitCode -ne 0) { [void](Git-In $RepoRoot @('reset', '--merge')); return @{ Ok = $false; Info = "$Err✗ le commit final a échoué (hook du projet ?) : rien n'a été modifié.$R" } }
             }
-            Cleanup-Run
-            return @{ Ok = $true; Info = "Le travail de l'équipe est dans $target ($(if ($dlv -eq 'merge') { 'merge' } else { 'un commit' }) : « $title »)." }
+            $arch = @(Cleanup-Run)
+            return @{ Ok = $true; Archive = $arch; Info = "Le travail de l'équipe est dans $target ($(if ($dlv -eq 'merge') { 'merge' } else { 'un commit' }) : « $title »)." }
         }
         'pr' {
             if (-not (Has-Cmd 'gh')) { return @{ Ok = $false; Info = "$Err✗ GitHub CLI absent : winget install --id GitHub.cli, puis gh auth login (ou L pour une autre livraison)$R" } }
@@ -1939,22 +2045,22 @@ function Deliver-Run([string]$dlv, [string]$target, [string]$cur) {
             Push-Location -LiteralPath $RepoRoot
             try { $url = & gh pr create --base $target --head $ib --title $title --body-file $bf 2>&1 | Out-String; $code = $LASTEXITCODE } finally { Pop-Location }
             if ($code -ne 0) { return @{ Ok = $false; Info = "$Err✗ gh pr create : $(($url.Trim() -split "`n")[-1])$R" } }
-            Cleanup-Run -KeepIntegration
-            return @{ Ok = $true; Info = "Pull request ouverte : $($url.Trim())" }
+            $arch = @(Cleanup-Run -KeepIntegration)
+            return @{ Ok = $true; Archive = $arch; Info = "Pull request ouverte : $($url.Trim())" }
         }
         'branch' {
             $remote = Git-In $RepoRoot @('remote')
             $pushed = $false
             if (@($remote | Where-Object { $_ -eq 'origin' }).Count) { [void](Git-In $RepoRoot @('push', '-u', 'origin', $ib)); $pushed = $GitCode -eq 0 }
-            Cleanup-Run -KeepIntegration
-            return @{ Ok = $true; Info = "Branche « $ib » prête$(if ($pushed) { ' et poussée sur origin' }) : à fusionner selon le workflow du projet." }
+            $arch = @(Cleanup-Run -KeepIntegration)
+            return @{ Ok = $true; Archive = $arch; Info = "Branche « $ib » prête$(if ($pushed) { ' et poussée sur origin' }) : à fusionner selon le workflow du projet." }
         }
     }
     @{ Ok = $false; Info = "$Err✗ mode de livraison inconnu : $dlv$R" }
 }
 
 function Mode-Review {
-    $iw = Int-Dir; $ib = Int-Branch; $msg = ''; $armJ = $false
+    $iw = Int-Dir; $ib = Int-Branch; $msg = ''
     Cls
     while ($true) {
         $W = [Math]::Max(40, (ConW) - 1)
@@ -1993,11 +2099,10 @@ function Mode-Review {
             default  { "fusionner dans $target" }
         }
         $L.Add("  $Dm commit final : « $(Final-Title) »$R")
-        $L.Add((Keys @('F', $fLabel, 'L', 'autre livraison', 'D', 'diff', 'O', 'terminal', 'J', 'jeter (×2)', 'Échap', 'plus tard')))
+        $L.Add((Keys @('F', $fLabel, 'L', 'autre livraison', 'D', 'diff', 'O', 'terminal', 'J', 'jeter', 'Échap', 'plus tard')))
         if ($msg) { $L.Add("  $msg") }
         Show-Frame $L
         $k = (Read-KeyOrHint); $ch = "$($k.KeyChar)".ToLower()
-        if ($ch -ne 'j') { $armJ = $false }
         if ($k.Key -eq 'Escape') { return 'quit' }
         elseif ($ch -eq 'd') {
             $c = "Set-Location -LiteralPath $(Q $iw); $(Git-Env)git diff $($State.base)..HEAD"
@@ -2014,22 +2119,42 @@ function Mode-Review {
             $msg = "$Dm livraison pour cette équipe : $(Deliver-Label $State.deliver)$R"
         }
         elseif ($ch -eq 'f') {
+            # 1) chaque tâche dite fusionnée doit réellement être dans la branche d'intégration
+            $gone = @($merged | Where-Object { $tt = Task-ById $_; [void](Git-In $RepoRoot @('merge-base', '--is-ancestor', (Task-Branch $tt), $ib)); $GitCode -ne 0 })
+            if ($gone.Count) {
+                $State.integration.merged = @($merged | Where-Object { $_ -notin $gone }); $State.integration.checks = @(); $State.status = 'integrating'; Save-State
+                [void](Message-Screen '⚑ ÉQUIPE — assemblage à refaire' @("$Warn La tâche $($gone -join ', ') n'est pas dans la branche d'intégration (fusion annulée ou refusée).$R", 'FLOW va refaire l''assemblage avant de livrer : rien n''est perdu.') @('Entrée', 'continuer'))
+                return 'integrate'
+            }
+            # 2) rien à livrer ?
+            if (-not $merged.Count) { $msg = "$Err✗ aucune tâche n'a été fusionnée : il n'y a rien à livrer (Échap pour revenir, J pour jeter)$R"; continue }
+            # 3) tâches qui ne seront PAS livrées : on le dit avant, et leur travail est mis à l'abri
+            $left = @($State.tasks | Where-Object { $_.id -notin $merged })
+            if ($left.Count) {
+                $k2 = Message-Screen '⚑ ÉQUIPE — tâches qui ne seront pas livrées' @(
+                    "Ces tâches ne sont pas dans le travail livré : $B$(($left.id) -join ', ')$R.",
+                    "$Ok Leur travail est mis de côté dans Git (refs/flow-archive/$($State.id)/…) : tu pourras le récupérer.$R") @('O', 'livrer quand même', 'Échap', 'annuler')
+                Cls
+                if ("$($k2.KeyChar)".ToLower() -ne 'o') { continue }
+            }
             $res = Deliver-Run $dlv $target $cur
             if ($res.Ok) {
                 $State.status = 'merged'; $State.integration.delivered = $res.Info; Save-State
-                [void](Message-Screen '⚑ ÉQUIPE — livré' @("$Ok✓ $($res.Info)$R", "$Dm Copies de travail et branches temporaires supprimées ; l'historique reste dans $RunDir.$R") @('Entrée', 'nouvelle demande'))
+                [void](Message-Screen '⚑ ÉQUIPE — livré' (@("$Ok✓ $($res.Info)$R", "$Dm Copies de travail et branches temporaires supprimées ; l'historique reste dans $RunDir.$R") + @(Archive-Lines $res.Archive)) @('Entrée', 'nouvelle demande'))
                 return 'home'
             }
             $msg = $res.Info
         }
         elseif ($ch -eq 'j') {
-            if (-not $armJ) { $armJ = $true; $msg = "$Err⚠ J encore une fois pour jeter tout le travail de l'équipe (ton dossier n'est pas touché)$R" }
-            else { Cleanup-Run; $State.status = 'discarded'; Save-State; return 'home' }
+            $ok = Confirm-Discard '⚑ ÉQUIPE — jeter le travail de l''équipe ?'
+            Cls
+            if ($ok) { $arch = @(Cleanup-Run -Abandon); $State.status = 'discarded'; Save-State; Show-Archive $arch; return 'home' }
         }
     }
 }
 
 # ───────────────────────── boucle principale ─────────────────────────
+if ($LoadOnly) { return }   # tests : les fonctions sont chargées, l'écran n'est pas lancé
 $mode = 'setup'
 Enable-Mouse
 try {

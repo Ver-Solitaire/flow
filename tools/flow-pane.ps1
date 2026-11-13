@@ -21,6 +21,7 @@ param(
     [switch]$Team
 )
 $ErrorActionPreference = 'SilentlyContinue'
+. (Join-Path $PSScriptRoot 'flow-common.ps1')
 function Say([string]$s) { & psmux -L $Sock display-message $s *> $null }
 
 if (-not $Target) { $Target = (& psmux -L $Sock display-message -p '#{session_name}:#{window_index}.#{pane_index}' | Select-Object -First 1) }
@@ -114,7 +115,7 @@ if ($Save) {
         $prof = Get-Content -LiteralPath $file -Raw -Encoding utf8 | ConvertFrom-Json -ErrorAction Stop
         Copy-Item -LiteralPath $file -Destination "$file.bak" -Force          # sauvegarde de l'ancienne disposition
         $prof | Add-Member -NotePropertyName rows -NotePropertyValue $rows -Force
-        ($prof | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $file -Encoding utf8
+        Write-JsonAtomic $prof $file -Depth 20
         Say "FLOW : disposition enregistrée dans $(Split-Path $file -Leaf) (ancienne version : .bak)"
     } catch { Say "FLOW : impossible d'enregistrer ($($_.Exception.Message))" }
 }

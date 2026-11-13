@@ -99,6 +99,7 @@ $Err  = Rgb 255 110 90
 $Info = Rgb 120 200 255
 $Warn = Rgb 255 210 110
 . (Join-Path $PSScriptRoot 'tools\flow-input.ps1')   # clavier + souris (clics)
+. (Join-Path $PSScriptRoot 'tools\flow-common.ps1')  # écritures atomiques
 $KeyPairs = [Collections.Generic.List[string]]::new()  # aides affichées (rendues cliquables)
 function Key([string]$key, [string]$txt) { $KeyPairs.Add("$key|$txt"); "$B$Warn$key$R $Dm$txt$R" }
 function Hint-Zones($lines) {
@@ -167,7 +168,7 @@ function Read-ProfileFile([string]$file) {
 function Write-ProfileFile($p, [string]$file) {
     $o = [ordered]@{}
     foreach ($pr in $p.PSObject.Properties) { if ($pr.Name -notin 'Id', 'File', 'Shared', 'SharedSrc', 'SharedKey') { $o[$pr.Name] = $pr.Value } }
-    ($o | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $file -Encoding utf8
+    Write-JsonAtomic $o $file -Depth 20 -Backup
 }
 
 function Slugify([string]$name, [string]$fallback = 'profil') {
@@ -215,7 +216,7 @@ function Set-Project([string]$dir) {
     $rec = @([pscustomobject]@{ path = $d; last = (Get-Date).ToString('s') }) + $rec | Select-Object -First 30
     try {
         New-Item -ItemType Directory -Force (Split-Path $ProjFile) | Out-Null
-        [pscustomobject]@{ recent = @($rec) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ProjFile -Encoding utf8
+        Write-JsonAtomic ([pscustomobject]@{ recent = @($rec) }) $ProjFile -Depth 5
     } catch {}
 }
 
@@ -389,7 +390,7 @@ function Add-Account {
     if (-not $col) { $col = $cols[($n - 1) % $cols.Count] }
     $list += [pscustomobject][ordered]@{ id = "compte$n"; label = "$label".Trim(); short = "C$n"; dir = "~/.claude-compte$n"; color = $col; enabled = $true }
     New-Item -ItemType Directory -Force (Split-Path $AcctFile) | Out-Null
-    ([pscustomobject]@{ accounts = @($list) } | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $AcctFile -Encoding utf8
+    Write-JsonAtomic ([pscustomobject]@{ accounts = @($list) }) $AcctFile -Depth 5 -Backup
     $script:Accounts = Get-Accounts
     $Accounts | Where-Object { $_.Id -eq "compte$n" } | Select-Object -First 1
 }
@@ -503,7 +504,7 @@ function Start-AccountLogin($a, [switch]$Inline) {
 
 function Get-State { try { Get-Content -LiteralPath $StateFile -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json } catch { $null } }
 function Save-LastUsed([string]$id) {
-    try { ([ordered]@{ last = $id } | ConvertTo-Json) | Set-Content -LiteralPath $StateFile -Encoding utf8 } catch {}
+    try { Write-JsonAtomic ([ordered]@{ last = $id }) $StateFile -Depth 3 } catch {}
 }
 
 # dispositions proposées à la création d'un profil
@@ -566,7 +567,7 @@ function Ensure-StatusLine([string]$claudeDir) {
     if ($cur -and $cur -notmatch 'statusline\.ps1') { return }   # barre de statut perso : on n'y touche pas
     $j | Add-Member -NotePropertyName statusLine -NotePropertyValue ([pscustomobject]@{ type = 'command'; command = $cmd }) -Force
     New-Item -ItemType Directory -Force $claudeDir | Out-Null
-    ($j | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $file -Encoding utf8
+    Write-JsonAtomic $j $file -Depth 20 -Backup
 }
 
 function Install-Skills([string]$claudeDir) {
@@ -1083,7 +1084,7 @@ function Save-Sources($list) {
             [pscustomobject]$o
         })
     New-Item -ItemType Directory -Force (Split-Path $SrcFile) | Out-Null
-    ([ordered]@{ sources = $arr } | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $SrcFile -Encoding utf8
+    Write-JsonAtomic ([ordered]@{ sources = $arr }) $SrcFile -Depth 5 -Backup
 }
 
 function Get-SharedLocal {
@@ -1095,7 +1096,7 @@ function Get-SharedLocal {
 function Set-SharedCwd([string]$key, [string]$cwd) {
     $h = Get-SharedLocal
     $h[$key] = [pscustomobject]@{ cwd = $cwd }
-    ($h | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $ShLocFile -Encoding utf8
+    Write-JsonAtomic $h $ShLocFile -Depth 5
 }
 
 function Get-SharedProfiles {

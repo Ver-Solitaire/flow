@@ -15,3 +15,6 @@ config/accounts.json
 # application compilée par -InstallShortcut, projets récents (propres à chaque machine)
 FLOW.exe
 config/projects.json
+
+# tests : modules téléchargés au besoin
+tests/.modules/

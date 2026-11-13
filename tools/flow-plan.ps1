@@ -21,6 +21,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
+. (Join-Path $PSScriptRoot 'flow-common.ps1')
 function Fail([string]$m) { Write-Host "ERREUR : $m"; exit 1 }
 
 $git = (Get-Command git -ErrorAction SilentlyContinue).Source
@@ -99,7 +100,7 @@ $state = [pscustomobject]@{
     integration = [pscustomobject]@{ merged = @(); skipped = @(); conflict = ''; tests = $null; checks = @(); delivered = '' }
 }
 Set-Content -LiteralPath (Join-Path $runDir 'demande.md') $request -Encoding utf8
-($state | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath (Join-Path $runDir 'state.json') -Encoding utf8
+Write-JsonAtomic $state (Join-Path $runDir 'state.json') -Depth 12
 
 Write-Host "Plan déposé : $($tasks.Count) tâche(s) — équipe $id"
 foreach ($t in $tasks) { Write-Host ("  {0}  [{1}]  {2}{3}" -f $t.id, $t.model, $t.title, $(if ($t.depends.Count) { "  (après $($t.depends -join ', '))" } else { '' })) }
