@@ -79,6 +79,15 @@ $Ok = Rgb 120 230 140; $Err = Rgb 255 110 90; $Info = Rgb 120 200 255; $Warn = R
 $KeyPairs = [Collections.Generic.List[string]]::new()   # aides affichées dans l'image en cours (rendues cliquables)
 function Key([string]$k, [string]$t) { $KeyPairs.Add("$k|$t"); "$B$Warn$k$R $Dm$t$R" }
 function Keys([string[]]$pairs) { $o = @(); for ($i = 0; $i -lt $pairs.Count; $i += 2) { $o += Key $pairs[$i] $pairs[$i + 1] }; '  ' + ($o -join '   ') }
+# Fil d'étapes affiché sur chaque écran : on voit toujours où l'on en est, et la seule chose à faire maintenant.
+function Stepper([int]$n) {
+    $names = 'Demande', 'Plan', 'Travail', 'Fusion', 'Validation'
+    $o = for ($i = 1; $i -le 5; $i++) {
+        if ($i -lt $n) { "$Ok✓ $($names[$i - 1])$R" } elseif ($i -eq $n) { "$B$Teal● $i $($names[$i - 1])$R" } else { "$Dm○ $($names[$i - 1])$R" }
+    }
+    '  ' + ($o -join "$Dm ─ $R")
+}
+function Now([string]$t) { "  $B$Warn▶ À toi :$R $t" }
 $LastFrameSize = ''
 function Show-Frame($lines) {
     $W = [Math]::Max(40, (ConW) - 1); $H = [Math]::Max(6, (ConH))
@@ -828,6 +837,7 @@ function Read-Prompt([string]$initial) {
         $W = [Math]::Max(40, (ConW) - 1); $H = ConH
         $L = [Collections.Generic.List[string]]::new()
         $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — nouvelle demande' 0.1)   $B$(Split-Path $RepoRoot -Leaf)$R  $Dm$RepoRoot$R")
+        $L.Add((Stepper 1)); $L.Add((Now 'décris ce que tu veux, puis appuie sur F5 pour l''envoyer'))
         $L.Add("  $(Accounts-Line)")
         $miss = @(Missing-Accounts)
         if ($miss.Count -and $Accs.Count -gt 1) { $L.Add("  $Warn⚠ $(($miss.Label) -join ', ') : non connecté — F4 pour le connecter (sinon tout part sur les autres comptes)$R") }
@@ -841,7 +851,7 @@ function Read-Prompt([string]$initial) {
         $L.Add('')
         $txt = @(); foreach ($ln in $lines) { $txt += @(Chunks $ln ($W - 6)) }
         if (-not $txt.Count) { $txt = @('') }
-        $room = [Math]::Max(3, $H - 16)
+        $room = [Math]::Max(3, $H - 18)
         $shown = @($txt | Select-Object -Last $room)
         $bc = Rgb 70 74 96
         $L.Add("  $bc╭$('─' * ($W - 5))╮$R")
@@ -1294,7 +1304,9 @@ function Mode-Plan {
         $ts = @($State.tasks)
         $L = [Collections.Generic.List[string]]::new()
         $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — plan proposé' 0.1)   $Dm$($State.id)$R")
-        $L.Add("  $B$($State.summary)$R"); $L.Add("  $(Accounts-Line)"); $L.Add('')
+        $L.Add("  $B$($State.summary)$R"); $L.Add((Stepper 2))
+        $L.Add((Now 'vérifie le plan. Entrée = lancer l''équipe (tu peux changer compte, modèle ou tâches avant)'))
+        $L.Add("  $(Accounts-Line)"); $L.Add('')
         $planZones = @()
         for ($i = 0; $i -lt $ts.Count; $i++) {
             $t = $ts[$i]
@@ -1779,7 +1791,10 @@ function Mode-Run {
         $W = [Math]::Max(40, (ConW) - 1)
         $L = [Collections.Generic.List[string]]::new()
         $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — au travail' ($script:Tick * 0.01))   $Dm$($State.id)$R")
-        $L.Add("  $B$($State.summary)$R"); $L.Add("  $(Accounts-Line)"); $L.Add('')
+        $L.Add("  $B$($State.summary)$R"); $L.Add((Stepper 3))
+        $waiting = @($ts | Where-Object { $_.live -eq 'waiting' })
+        $L.Add($(if ($waiting.Count) { Now "$($waiting.id -join ', ') attend(ent) ta réponse : choisis-la avec ↑↓ puis Entrée pour voir son Claude et lui répondre" } else { "  $Dm▶ Rien à faire : les Claude travaillent. Tu peux suivre ou fermer, ça continue.$R" }))
+        $L.Add("  $(Accounts-Line)"); $L.Add('')
         $runRows = @()
         for ($i = 0; $i -lt $ts.Count; $i++) {
             $t = $ts[$i]
@@ -1927,7 +1942,7 @@ function Final-Body {
 function Mode-Integrate {
     $ib = Int-Branch; $iw = Int-Dir
     $log = [Collections.Generic.List[string]]::new()
-    function Show-Log { Cls; Show-Frame (@('', "  $(Grad '⚑ ÉQUIPE — intégration' 0.1)", '') + @($log | ForEach-Object { "  $_" })) }
+    function Show-Log { Cls; Show-Frame (@('', "  $(Grad '⚑ ÉQUIPE — intégration' 0.1)", (Stepper 4), "  $Dm▶ Rien à faire : FLOW rassemble le travail de chaque tâche.$R", '') + @($log | ForEach-Object { "  $_" })) }
 
     if (-not (Test-Path -LiteralPath $iw)) {
         $o = Git-In $RepoRoot @('worktree', 'add', '-b', $ib, $iw, $State.base)
@@ -2168,7 +2183,8 @@ function Mode-Review {
         $L = [Collections.Generic.List[string]]::new()
         $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — à valider' 0.1)   $Dm$($State.id)$R")
         $L.Add("  $B$($State.summary)$R")
-        $L.Add("  $Teal Le travail est terminé : F le met dans ton projet · N pose une nouvelle demande (celle-ci reste à valider)$R"); $L.Add('')
+        $L.Add((Stepper 5))
+        $L.Add((Now 'le travail est prêt. F = le mettre dans ton projet · D = le relire · N = nouvelle demande (celui-ci reste à valider)')); $L.Add('')
         $merged = @($State.integration.merged); $skipped = @($State.integration.skipped)
         $L.Add("  $Dm branche d'intégration$R $ib   $Dm dossier$R $iw")
         $L.Add("  $Ok✓ fusionnées : $(if ($merged) { $merged -join ', ' } else { 'aucune' })$R$(if ($skipped) { "   $Warn laissées de côté : $($skipped -join ', ')$R" })")
