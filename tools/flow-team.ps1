@@ -850,7 +850,7 @@ function Read-Prompt([string]$initial) {
             $L.Add("  $bc│$R $(Fit "$($shown[$i])$cur" ($W - 7)) $bc│$R")
         }
         $L.Add("  $bc╰$('─' * ($W - 5))╯$R")
-        $L.Add('')
+        $L.Add("  $B$Teal▶ F5 ou Ctrl+D = ENVOYER la demande à l'équipe$R  $Dm(Entrée = nouvelle ligne)$R$(if ($lines.Count -and ($lines -join '').Trim()) { "  $Warn← pas encore envoyée$R" })")
         $L.Add((Keys @('F5 / Ctrl+D', 'envoyer', 'Entrée', 'nouvelle ligne', 'F2', 'profil du projet', 'F3', 'changer de projet', 'F4', 'comptes', 'F6', 'plans en attente', 'Échap', 'quitter')))
         Show-Frame $L
         $k = (Read-KeyOrHint)
