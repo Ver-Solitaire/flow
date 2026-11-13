@@ -424,6 +424,43 @@ function Add-Account {
     $Accounts | Where-Object { $_.Id -eq "compte$n" } | Select-Object -First 1
 }
 
+function Invoke-RemoveAccount {
+    # retire un compte de FLOW (config\accounts.json), avec ou sans déconnexion. Le compte par défaut de Claude Code (~\.claude) ne se retire pas.
+    # renvoie un message pour l'écran.
+    $script:Accounts = Get-Accounts
+    $cands = @($Accounts | Where-Object { $_.Dir })
+    if (-not $cands.Count) { return "$Dm aucun compte à retirer : le compte par défaut de Claude Code reste toujours$R" }
+    $i = Pick-Item '◆ RETIRER UN COMPTE — lequel ?' $cands {
+        param($a)
+        "$(RgbA $a.Rgb)◆ $($a.Label)$R $Dm[$($a.Id)]$R  $(if ($a.Logged) { "$Ok● connecté$R $Dm$(Acct-Mail $a)$R" } else { "$Dm○ pas connecté$R" })"
+    } { param($a) @("$Dm dossier$R  $($a.Home)") }
+    if ($i -lt 0) { return '' }
+    $a = $cands[$i]
+    $used = @(Get-Profiles | Where-Object { $pp = $_; ([string]$pp.account -eq $a.Id) -or @(Claude-Panes $pp | Where-Object { [string]$_.account -eq $a.Id }).Count } | ForEach-Object { $_.name })
+    $choices = @('Retirer et déconnecter le compte (efface sa connexion)', 'Retirer de FLOW seulement (la connexion et l''historique restent dans son dossier)', 'Annuler')
+    $c = Pick-Item "◆ Retirer « $($a.Label) » de FLOW ?" $choices { param($x) $x } {
+        param($x)
+        $l = @("$Dm Le dossier $($a.Home) n'est jamais supprimé : tu peux le retirer à la main plus tard.$R")
+        if ($used) { $l += "$Warn Profils qui utilisent ce compte : $($used -join ', ') — ils ne se lanceront plus tant que tu ne les as pas modifiés (E dans le sélecteur).$R" }
+        $l
+    } 2
+    if ($c -notin 0, 1) { return "$Dm retrait annulé$R" }
+    if ($c -eq 0 -and $a.Logged) {
+        $old = $env:CLAUDE_CONFIG_DIR
+        try { $env:CLAUDE_CONFIG_DIR = $a.Dir; Start-Process -FilePath (Get-Command claude -ErrorAction Stop).Source -ArgumentList @('auth', 'logout') -NoNewWindow -Wait }
+        catch { Write-FlowLog "déconnexion de « $($a.Label) » impossible : $($_.Exception.Message)" 'WARN' }
+        finally { if ($old) { $env:CLAUDE_CONFIG_DIR = $old } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue } }
+    }
+    $j = $null
+    try { $j = Get-Content -LiteralPath $AcctFile -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json } catch {}
+    $list = @(@($j.accounts) | Where-Object { $_ -and $_.id -ne $a.Id })
+    Write-JsonAtomic ([pscustomobject]@{ accounts = $list }) $AcctFile -Depth 5 -Backup
+    $script:Accounts = Get-Accounts
+    $script:AcctLines = $null
+    Write-FlowLog "compte « $($a.Label) » retiré de FLOW$(if ($c -eq 0) { ' et déconnecté' })"
+    "$Ok✓ « $($a.Label) » retiré de FLOW$(if ($c -eq 0) { ' et déconnecté' })$(if ($used) { " $Warn— à corriger dans les profils : $($used -join ', ')" })$R"
+}
+
 function Invoke-AccountGate($p, [switch]$ForProject) {
     # connecter les comptes qui ne le sont pas encore. Deux moments :
     #  - -ForProject : à la sélection du projet (tous les comptes activés ; signale aussi deux comptes qui ont la même adresse) ;
@@ -440,7 +477,7 @@ function Invoke-AccountGate($p, [switch]$ForProject) {
         elseif ($need.Count -lt 2 -or -not $missing.Count) { return @{ Go = $true; Shown = $shown } }
         $shown = $true
         $team = $ForProject -or (Uses-Role $p 'team')
-        $items = @($need) + @(if ($team) { [pscustomobject]@{ Add = $true } }) + @([pscustomobject]@{ Go = $true })
+        $items = @($need) + @(if ($team) { [pscustomobject]@{ Add = $true } }) + @(if (@($Accounts | Where-Object { $_.Dir }).Count) { [pscustomobject]@{ Remove = $true } }) + @([pscustomobject]@{ Go = $true })
         $first = 0; for ($q = 0; $q -lt $need.Count; $q++) { if (-not $need[$q].Logged) { $first = $q; break } }
         if (-not $missing.Count -and $dupes.Count) { $first = [Math]::Max(0, [array]::IndexOf($need, ($dupes | Where-Object { $_.Dir } | Select-Object -First 1))) }   # le compte à reconnecter est déjà sélectionné
         $title = if ($ForProject) { "◆ COMPTES — projet « $(Split-Path $ProjectDir -Leaf) » · $(if ($missing.Count) { "$($missing.Count) compte(s) à connecter" } else { 'comptes à vérifier' })" }
@@ -449,11 +486,13 @@ function Invoke-AccountGate($p, [switch]$ForProject) {
             param($x)
             if ($x.Go) { return "$Info▶ $(if ($ForProject) { 'continuer' } else { 'lancer maintenant' })$R $Dm$(if ($missing.Count) { "(sans $(($missing.Label) -join ', '))" } else { '(garder les comptes tels quels)' })$R" }
             if ($x.Add) { return "$Ok＋ ajouter un compte Claude…$R" }
+            if ($x.Remove) { return "$Warn－ retirer un compte…$R" }
             $st = if ($x.Logged) { $m = Acct-Mail $x; $dp = Dup-Of $x; "$Ok● connecté$R$(if ($m) { " $Dm$m$R" })$(if ($dp) { "  $Warn$B⚠ même adresse que $($dp.Label) — Entrée pour reconnecter$R" })" } else { "$Warn○ à connecter$R $Dm— Entrée$R" }
             "$(RgbA $x.Rgb)◆ $($x.Label)$R  $st"
         } {
             param($x)
             if ($x.Add) { return @("$Dm Un compte de plus = un Claude de plus pour se partager les tâches.$R") }
+            if ($x.Remove) { return @("$Dm Retire un compte de la liste de FLOW (avec ou sans le déconnecter).$R") }
             if ($x.Go) {
                 if ($team) { return @("$Dm Les tâches seront réparties uniquement sur les comptes connectés.$R") }
                 return @("$Dm Les panneaux des comptes non connectés afficheront l'écran de connexion de Claude.$R")
@@ -464,6 +503,7 @@ function Invoke-AccountGate($p, [switch]$ForProject) {
         if ($i -lt 0) { return @{ Go = [bool]$ForProject; Shown = $true } }   # à la sélection du projet, Échap ne bloque rien
         $x = $items[$i]
         if ($x.Go) { return @{ Go = $true; Shown = $true } }
+        if ($x.Remove) { [void](Invoke-RemoveAccount); continue }
         if ($x.Add) { $x = Add-Account; if (-not $x) { continue } }
         [void](Connect-Account $x -Relogin:([bool]($x.Logged -and $x.Dir -and (Dup-Of $x))))
     }
@@ -1475,10 +1515,11 @@ function Read-AcctLimits($a) {
 
 function Invoke-Accounts($profiles) {
     $script:Accounts = Get-Accounts
-    $items = @($Accounts) + @([pscustomobject]@{ Add = $true })
+    $items = @($Accounts) + @([pscustomobject]@{ Add = $true }) + @(if (@($Accounts | Where-Object { $_.Dir }).Count) { [pscustomobject]@{ Remove = $true } })
     $i = Pick-Item "◆ COMPTES CLAUDE — $($Accounts.Count) compte(s) · Entrée : connecter / ouvrir" $items {
         param($a)
         if ($a.Add) { return "$Ok＋ ajouter un compte Claude…$R" }
+        if ($a.Remove) { return "$Warn－ retirer un compte…$R" }
         $st = if ($a.Logged) { "$Ok● connecté$R" } else { "$Warn○ pas encore connecté$R" }
         $off = if (-not $a.Enabled) { "  $Dm(désactivé)$R" } else { '' }
         "$(RgbA $a.Rgb)$($a.Label)$R $Dm[$($a.Id)]$R  $st$off"
@@ -1486,6 +1527,7 @@ function Invoke-Accounts($profiles) {
         param($a)
         if ($a.Add) { return @("$Dm Autant de comptes que tu veux : chacun a son dossier, ses identifiants et ses limites.$R",
                                "$Dm Le profil Équipe répartit les tâches sur tous les comptes connectés.$R") }
+        if ($a.Remove) { return @("$Dm Retire un compte de la liste de FLOW (avec ou sans le déconnecter). Le compte par défaut de Claude Code ne se retire pas.$R") }
         $lines = @("$Dm dossier$R  $($a.Home)$(if (-not $a.Dir) { "  $Dm(compte par défaut)$R" })")
         $lim = Read-AcctLimits $a
         if ($lim -and $lim.rate_limits) {
@@ -1505,6 +1547,7 @@ function Invoke-Accounts($profiles) {
     }
     if ($i -lt 0) { return @{ Msg = '' } }
     $a = $items[$i]
+    if ($a.Remove) { return @{ Msg = (Invoke-RemoveAccount) } }
     if ($a.Add) { $a = Add-Account; if (-not $a) { return @{ Msg = "$Dm ajout annulé$R" } } }
     if (-not $a.Logged -or ($a.Dir -and (Dup-Of $a))) {
         $logged = Connect-Account $a -Relogin:$a.Logged

@@ -376,6 +376,10 @@ Les comptes sont déclarés dans `config\accounts.json` :
   lancement du profil Équipe). FLOW crée l'entrée dans `accounts.json` (dossier `~\.claude-compteN`) et enchaîne
   sur la connexion. Le profil Équipe répartit les tâches sur tous les comptes connectés ; à partir de 3 comptes,
   **N** (nouveau profil) propose la disposition « Un Claude par compte ».
+- **Retirer un compte** : touche **C** → « － retirer un compte… » (aussi proposé à l'écran de connexion). Au choix : retirer **et déconnecter** le compte,
+  ou le retirer de FLOW seulement. Le dossier du compte n'est jamais supprimé ; le compte par défaut de Claude Code ne se retire pas. Les profils qui
+  utilisaient le compte retiré sont signalés : ils ne se lancent plus tant qu'ils n'ont pas été modifiés (touche E).
+- **À la sélection du projet**, FLOW vérifie tout de suite les comptes (connectés ? deux comptes avec la même adresse ?) et propose de les corriger.
 - **Connexion à tout moment** : dans le sélecteur, touche **C** → choisir le compte → Entrée.
   En ligne de commande : `pwsh -File FLOW.ps1 -Login second`.
 - `"email": "moi@exemple.com"` (facultatif) sur un compte préremplit l'adresse sur la page de connexion.
