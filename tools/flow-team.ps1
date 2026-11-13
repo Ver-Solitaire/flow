@@ -2362,10 +2362,23 @@ function Mode-Review {
                 Write-TextAtomic $runner "[Console]::OutputEncoding = [Text.Encoding]::UTF8`nClear-Host`nGet-Content -LiteralPath $(Q $view) -Raw -Encoding utf8 | Write-Host`nWrite-Host ''`nWrite-Host '── fin · molette pour remonter · q puis une touche pour fermer cette fenêtre ──' -ForegroundColor Yellow`n[void][Console]::ReadKey(`$true)`n"
                 & psmux -L $Sock kill-window -t "${Session}:resultat" *> $null
                 & psmux -L $Sock new-window -t $Session -n resultat "pwsh -NoProfile -File `"$runner`"" *> $null
-                Start-Sleep -Milliseconds 700
                 & psmux -L $Sock select-window -t "${Session}:resultat" *> $null
+                # attendre que le texte soit entièrement écrit (taille de l'historique stable), puis se placer en haut
+                $last = -1; $stable = 0
+                for ($w8 = 0; $w8 -lt 40 -and $stable -lt 3; $w8++) {
+                    Start-Sleep -Milliseconds 150
+                    $hs = "$(& psmux -L $Sock display-message -t "${Session}:resultat" -p '#{history_size}' 2>$null)"
+                    if ($hs -eq $last -and $hs) { $stable++ } else { $stable = 0; $last = $hs }
+                }
+                Start-Sleep -Milliseconds 400
                 & psmux -L $Sock copy-mode -t "${Session}:resultat" *> $null
-                & psmux -L $Sock send-keys -t "${Session}:resultat" -X history-top *> $null
+                for ($w8 = 0; $w8 -lt 6; $w8++) {
+                    Start-Sleep -Milliseconds 300
+                    & psmux -L $Sock send-keys -t "${Session}:resultat" -X history-top *> $null
+                    Start-Sleep -Milliseconds 200
+                    $pp = "$(& psmux -L $Sock display-message -t "${Session}:resultat" -p '#{scroll_position}/#{history_size}' 2>$null)" -split '/'
+                    if ($pp.Count -eq 2 -and $pp[0] -eq $pp[1]) { break }
+                }
                 $msg = "$Dm fenêtre « resultat » ouverte (molette pour défiler, q puis une touche pour la fermer ; Ctrl+B 1 pour revenir ici)$R"
             } else { Show-Viewer $iw $changed; Cls }
         }
