@@ -257,6 +257,11 @@ Profil **Équipe — multi-comptes** (`profiles\equipe.json`) : la fenêtre Équ
 - les Claude ordinaires des panneaux confient eux aussi toute demande de travail à l'équipe (skill `taches-repartir`) ;
 - rien n'arrive dans ton projet sans ta validation finale.
 
+**Voir ce que les Claude s'échangent.** Le panneau **⇄ échanges** du profil Équipe affiche en direct qui parle à qui, dans la couleur de chaque
+compte (`C1·A` = la tâche A, sur le compte C1) : tâches confiées, messages directs (`@B : …`), annonces, fins de tâche, **relectures croisées**
+(avec les points à corriger), conseils et tes propres messages. Les mêmes lignes sont conservées dans `.flow\runs\<équipe>\echanges.jsonl`.
+Le panneau est un rôle de profil comme les autres : `{ "role": "exchanges" }`.
+
 1. **Demande** : tu écris ton prompt (Entrée = nouvelle ligne, **F5** ou **Ctrl+D** = envoyer).
 2. **Plan** : un Claude planificateur (compte le moins chargé, lecture seule) explore le projet et propose
    des tâches : fichiers attribués, dépendances, critères de fin, plus un *brief* commun (contexte, conventions,

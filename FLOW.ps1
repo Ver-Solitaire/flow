@@ -123,6 +123,7 @@ $RoleInfo = @{
     command = @{ Icon = '▶'; Label = 'commande'; Rgb = @(168,112,255) }
     team    = @{ Icon = '⚑'; Label = 'équipe';   Rgb = @(96,232,196) }
     office  = @{ Icon = '⌂'; Label = 'bureau';   Rgb = @(255,94,158) }
+    exchanges = @{ Icon = '⇄'; Label = 'échanges'; Rgb = @(96,232,196) }
 }
 function RoleOf($pane) { $r = [string]$pane.role; if ($RoleInfo.ContainsKey($r)) { $RoleInfo[$r] } else { $RoleInfo.command } }
 
@@ -762,6 +763,10 @@ function Pane-Command($pane, $p) {
         'office' {
             # Bureau : un personnage animé par Claude, une pièce par lot d'agents / workflow / équipe
             return "${pre}Clear-Host; pwsh -NoProfile -File $(Q (Join-Path $Tools 'flow-office.ps1')) -Watch $(Q (Watch-Arg $p $pane)) -Sock $Sock -Session $(Q (SessionName $p))"
+        }
+        'exchanges' {
+            # ce que les Claude de l'équipe s'écrivent (messages directs, annonces, relectures, conseils), en direct
+            return "${pre}Clear-Host; pwsh -NoProfile -File $(Q (Join-Path $Tools 'flow-exchanges.ps1')) -Repo $(Q $cd)"
         }
         'team' {
             # fenêtre Équipe : prompt → plan → ouvriers répartis sur les comptes (tools\flow-team.ps1)

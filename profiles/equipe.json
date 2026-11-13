@@ -1,23 +1,24 @@
 {
   "name": "Équipe — multi-comptes",
-  "description": "Prêt à l'emploi avec tous tes comptes connectés : fenêtre Équipe (demande → tâches réparties), un Claude par compte, moniteur et Bureau",
+  "description": "Prêt à l'emploi avec tous tes comptes connectés : fenêtre Équipe, échanges entre les Claude en direct, un Claude par compte, moniteur et Bureau",
   "order": 3,
   "session": "flow-equipe",
   "window": "dispatch",
   "cwd": "..",
   "rows": [
     {
-      "height": 60,
+      "height": 55,
       "panes": [
-        { "role": "team", "width": 62, "focus": true, "autoStart": 20 },
-        { "role": "monitor", "width": 38 }
+        { "role": "team", "width": 50, "focus": true, "autoStart": 20 },
+        { "role": "exchanges", "width": 50 }
       ]
     },
     {
-      "height": 40,
+      "height": 45,
       "panes": [
-        { "role": "claude", "perAccount": true, "args": "--teammate-mode tmux", "width": 62 },
-        { "role": "office", "width": 38 }
+        { "role": "claude", "perAccount": true, "args": "--teammate-mode tmux", "width": 50 },
+        { "role": "monitor", "width": 25 },
+        { "role": "office", "width": 25 }
       ]
     }
   ]

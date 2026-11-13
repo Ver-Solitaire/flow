@@ -16,6 +16,8 @@
 
 - **Équipe autonome** : toujours une équipe, même pour une petite demande (découpage par rôles : réalisateur, testeur, documentation, contre-vérification) ; messages directs entre ouvriers (`@B : …`) ; mode `auto` pour les ouvriers ; lancement automatique du plan sans risque après 20 s (`autoStart`).
 
+- **Panneau « échanges »** dans le profil Équipe : ce que les Claude s'écrivent (messages directs, annonces, relectures, conseils), en direct, par compte ; journal `echanges.jsonl`.
+
 ### Corrigé
 - Les ouvriers de l'équipe ne démarraient pas seuls : la consigne passait après `--add-dir` et était prise pour un dossier.
 - Livraison, abandon et nettoyage ne détruisent plus de travail : sauvegarde des fichiers non commités, branches des tâches non intégrées conservées sous `refs/flow-archive/…`.

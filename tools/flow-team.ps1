@@ -1424,6 +1424,7 @@ function Start-Task($t) {
     $acct = Acct-ById $t.account
     New-Item -ItemType Directory -Force (Split-Path (Help-File $t.id)), (Split-Path (Advice-File $t.id)) | Out-Null
     Open-Pane $t.id "⚑ $($t.id) · $($t.title) · $($acct.Short) · $($t.model)" (Pane-Cmd $wt $acct $pf -Setup -Model $t.model) $wt
+    Write-Exchange 'FLOW' $t.id 'tâche' "tâche confiée ($($t.model)) : $($t.title) — $($t.goal)" '' $t.account
     $t.status = 'running'; $t.startedAt = (Get-Date).ToString('o')
 }
 
@@ -1474,6 +1475,7 @@ function Check-Advisors {
         Add-Content -LiteralPath (Advice-File $id) ($head + $txt) -Encoding utf8
         $t.advisor = 'done'; $t.advice = [int]$t.advice + 1; Save-State
         [void](Send-ToPane $id "[FLOW] Ton conseiller ($($a.Model)) a répondu : lis $(Advice-File $id) (dernière section) et applique son plan.")
+        Write-Exchange 'conseiller' $id 'conseil' ("conseil ($($a.Model)) : " + (($txt -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 2) -join ' ')) '' $t.account
         Notify "◈ Conseil pour la tâche $id" "Le conseiller ($($a.Model)) a répondu à l'ouvrier."
     }
 }
@@ -1544,6 +1546,7 @@ function Start-Review($t) {
         [pscustomobject]@{ Code = $LASTEXITCODE; Out = $out }
     } -ArgumentList $t.worktree, $acct.Dir, $msg, $RunDir, $model
     $RevJobs[$t.id] = [pscustomobject]@{ Job = $job; Model = $model; Acct = $acct; Round = $round; Start = Get-Date }
+    Write-Exchange $acct.Id $t.id 'relecture' "relecture n°$round de « $($t.title) » demandée (travail de $($t.account))" $acct.Id $t.account
     $t.review = 'pending'; $t.reviewer = $acct.Id
     Save-State
 }
@@ -1575,6 +1578,7 @@ function Check-Reviews {
             Add-Content -LiteralPath (Review-File $id) ($head + "(la relecture n'a pas pu être faite : sortie brute dans $raw)`n") -Encoding utf8
             $t.review = 'impossible'
             Write-FlowLog "relecture de $id impossible (sortie brute : $raw)" 'ERREUR'
+            Write-Exchange $a.Acct.Id $id 'erreur' "relecture impossible (réponse absente, illisible ou hors délai) : la tâche est acceptée sans relecture" $a.Acct.Id $t.account
             Notify "⚠ Relecture de la tâche $id impossible" 'La tâche est acceptée sans relecture.'
             $note = "$Err⌕ relecture de $id IMPOSSIBLE : tâche acceptée SANS relecture (détail : relectures\$id-$($a.Round).sortie.txt)$R"
             continue
@@ -1585,6 +1589,7 @@ function Check-Reviews {
         $md = $head + "**Avis :** $($rvw.summary)`n"
         foreach ($is in $issues) { $md += "`n- **[$($is.severity)]** ``$($is.file)`` — $($is.problem)`n  - correction proposée : $($is.fix)" }
         Add-Content -LiteralPath (Review-File $id) ($md + "`n") -Encoding utf8
+        Write-Exchange $a.Acct.Id $id 'relecture' "$(if ($serious.Count) { "$($serious.Count) point(s) à corriger" } else { 'rien de bloquant' }) — $($rvw.summary)$(foreach ($is in @($serious | Select-Object -First 2)) { " · [$($is.severity)] $($is.file) : $($is.problem)" })" $a.Acct.Id $t.account
         if ("$($rvw.verdict)" -eq 'changes' -and $serious.Count) {
             $t.review = 'changes'
             $sent = Send-ToPane $id "[FLOW] Relecture croisée par $($a.Acct.Label) : $($serious.Count) point(s) à corriger. Lis $(Review-File $id) (dernière section), corrige les points bloquants et importants, relance les vérifications, fais un commit, puis RÉÉCRIS ton compte-rendu $(Result-File $id) en y ajoutant ce que tu as corrigé : c'est ce qui signale que tu as fini."
@@ -1598,6 +1603,17 @@ function Check-Reviews {
     }
     Save-State
     $note
+}
+
+function Write-Exchange {
+    # Journal des échanges entre les Claude de l'équipe (echanges.jsonl, lu par le panneau « échanges » du profil).
+    # $From / $To : lettre d'une tâche, « FLOW », « Toi » ou « tous » ; $FromAcct / $ToAcct : identifiants de compte (facultatifs).
+    param([string]$From, [string]$To, [string]$Kind, [string]$Text, [string]$FromAcct = '', [string]$ToAcct = '')
+    if (-not $RunDir) { return }
+    try {
+        $o = [ordered]@{ t = (Get-Date).ToString('HH:mm:ss'); from = $From; fromAcct = $FromAcct; to = $To; toAcct = $ToAcct; kind = $Kind; text = (($Text -replace '\s+', ' ').Trim()) }
+        Add-Content -LiteralPath (Join-Path $RunDir 'echanges.jsonl') -Value ($o | ConvertTo-Json -Compress) -Encoding utf8
+    } catch {}
 }
 
 function Relay-Announcements($t) {
@@ -1617,10 +1633,14 @@ function Relay-Announcements($t) {
         if ($to.Count) {
             foreach ($d in $to) {
                 $dest = Task-ById $d
-                if ($dest.status -eq 'running' -and (Send-ToPane $d "[FLOW] Message de l'ouvrier $($t.id) ($($t.title)) pour toi : « $txt ». Si besoin, réponds-lui par une ligne « @$($t.id) : … » dans ton fichier d'annonces $(Announce-File $d).")) { $n++ }
+                if ($dest.status -eq 'running' -and (Send-ToPane $d "[FLOW] Message de l'ouvrier $($t.id) ($($t.title)) pour toi : « $txt ». Si besoin, réponds-lui par une ligne « @$($t.id) : … » dans ton fichier d'annonces $(Announce-File $d).")) {
+                    $n++
+                    Write-Exchange $t.id $d 'message' $txt $t.account $dest.account
+                }
             }
         } else {
             Tell-Others $t.id "[FLOW] Annonce de l'ouvrier $($t.id) ($($t.title)) : « $txt ». Si elle concerne ta tâche, adapte-toi ; sinon continue sans t'interrompre."
+            Write-Exchange $t.id 'tous' 'annonce' $txt $t.account ''
             $n++
         }
     }
@@ -1636,6 +1656,7 @@ function Tell-Others([string]$fromId, [string]$text) {
 function Finish-Task($t) {
     $t.status = 'done'; $t.doneAt = (Get-Date).ToString('o'); $t.live = 'done'
     Write-FlowLog "tâche $($t.id) terminée ($($t.title))"
+    Write-Exchange $t.id 'tous' 'fin' "tâche terminée$(if ([int]$t.reviews -and $t.review -ne 'impossible') { ' et relue' }) : $($t.title) (compte-rendu et code disponibles pour les autres)" $t.account ''
     $rel = if ([int]$t.reviews -and $t.review -ne 'impossible') { ' et relue' } else { '' }
     if ($Psmux) { Set-PaneState $t.id 'done' "✓ terminé$(if ($rel) { ' · relu' })" }
     Notify "✓ Tâche $($t.id) terminée$rel" $t.title
@@ -1815,6 +1836,7 @@ function Mode-Run {
             elseif ($ch -eq 'm' -and $t.status -eq 'running') {
                 $txt = Read-Line "⚑ ÉQUIPE — message pour l'ouvrier $($t.id)" "Ce que tu veux dire à « $($t.title) » ($($t.model)) :"
                 Cls
+                if ($txt) { Write-Exchange 'Toi' $t.id 'message' $txt '' $t.account }
                 if ($txt) { $msg = if (Send-ToPane $t.id $txt) { "$Ok✓ message envoyé à $($t.id)$R" } else { "$Err✗ panneau de $($t.id) introuvable (L pour le relancer)$R" } }
             }
             elseif ($ch -eq 'c' -and $t.status -eq 'running' -and $t.worktree) {
