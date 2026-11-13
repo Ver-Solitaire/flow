@@ -148,8 +148,10 @@ function First-Prompt([string]$file) {
 # ───────────────────────── équipes FLOW ─────────────────────────
 $RecentFile = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\config\team-projects.json'))
 function Team-Projects {
+    # équipes du (des) projet(s) de CETTE session : le Bureau d'un projet n'affiche pas les équipes des autres projets (ni d'une démo oubliée).
+    # La liste des projets récents ne sert que si la session n'a aucun dossier de projet.
     $lst = @($Accts | Where-Object { $_.Cwd } | ForEach-Object { $_.Cwd })
-    try { $lst += @(Get-Content -LiteralPath $RecentFile -Raw | ConvertFrom-Json) } catch {}
+    if (-not $lst.Count) { try { $lst += @(Get-Content -LiteralPath $RecentFile -Raw | ConvertFrom-Json) } catch {} }
     @($lst | Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath($_) } | Select-Object -Unique)
 }
 
