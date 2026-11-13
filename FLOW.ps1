@@ -946,6 +946,9 @@ function Bind-PaneKeys {
     foreach ($d in @(@('Left', 'L'), @('Right', 'R'), @('Up', 'U'), @('Down', 'D'))) {
         & psmux -L $Sock bind-key -n "M-S-$($d[0])" run-shell (& $run "-Move $($d[1])") *> $null
     }
+    # molette : un programme qui a demandé la souris (écrans FLOW, Claude Code…) la reçoit ; sinon psmux défile son historique
+    & psmux -L $Sock bind-key -n WheelUpPane if-shell -F '#{||:#{mouse_any_flag},#{pane_in_mode}}' 'send-keys -M' 'copy-mode -e' *> $null
+    & psmux -L $Sock bind-key -n WheelDownPane if-shell -F '#{||:#{mouse_any_flag},#{pane_in_mode}}' 'send-keys -M' 'send-keys -M' *> $null
     & psmux -L $Sock bind-key -T prefix W run-shell (& $run '-Save') *> $null
     & psmux -L $Sock bind-key -T prefix T run-shell (& $run '-Team') *> $null
     $menu = @('-T', ' Agencer ',
