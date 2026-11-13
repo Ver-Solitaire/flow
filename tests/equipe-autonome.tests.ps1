@@ -64,7 +64,13 @@ Describe 'Consignes de l''équipe autonome' {
         $p | Should -Match 'RÔLES'
         $p | Should -Match 'testeur'
     }
-    It 'les ouvriers travaillent en mode auto et savent s''écrire' {
-        $WorkerArgs | Should -Match 'permission-mode auto'
+    It 'les ouvriers ont toutes les permissions d''avance (aucune demande de permission)' {
+        $WorkerArgs | Should -Match 'permission-mode bypassPermissions'
+    }
+    It 'le profil Équipe donne aussi toutes les permissions à ses Claude' {
+        $p = Get-Content (Join-Path $global:FlowRoot 'profiles\equipe.json') -Raw | ConvertFrom-Json
+        $cl = @($p.rows.panes | Where-Object { $_.role -eq 'claude' })
+        $cl.Count | Should -BeGreaterThan 0
+        foreach ($c in $cl) { $c.args | Should -Match 'bypassPermissions' }
     }
 }

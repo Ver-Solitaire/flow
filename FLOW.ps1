@@ -699,6 +699,22 @@ function Ensure-StatusLine([string]$claudeDir) {
     Write-JsonAtomic $j $file -Depth 20 -Backup
 }
 
+function Ensure-BypassAllowed([string]$claudeDir) {
+    # Les Claude des équipes tournent sans aucune demande de permission (mode « bypassPermissions »). Claude Code affiche alors, une fois par
+    # compte, un écran d'avertissement qui bloquerait un ouvrier lancé tout seul : on l'écarte dans le settings.json du compte.
+    $file = Join-Path $claudeDir 'settings.json'
+    $j = $null
+    if (Test-Path -LiteralPath $file) {
+        try { $j = Get-Content -LiteralPath $file -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json } catch { return }
+    }
+    if (-not $j) { $j = [pscustomobject]@{} }
+    if ($j.skipDangerousModePermissionPrompt -eq $true) { return }
+    $j | Add-Member -NotePropertyName skipDangerousModePermissionPrompt -NotePropertyValue $true -Force
+    New-Item -ItemType Directory -Force $claudeDir | Out-Null
+    Write-JsonAtomic $j $file -Depth 20 -Backup
+    Write-FlowLog "avertissement « bypass permissions » désactivé dans $file (équipes sans demandes de permission)"
+}
+
 function Install-Skills([string]$claudeDir) {
     # copie les skills livrés avec FLOW (dossier skills\) dans <compte>\skills\ : disponibles dans tous les projets,
     # pour chaque compte. « {{FLOW_ROOT}} » y est remplacé par l'emplacement de FLOW (appel de ses outils).
@@ -814,6 +830,10 @@ function Start-FlowProfile($p) {
     $homes = @(foreach ($row in @($p.rows)) { foreach ($pn in @($row.panes)) { (Acct-For $pn $p).Home } })
     if (Uses-Role $p 'monitor') { $homes += @($Accounts | Where-Object { $_.Enabled } | ForEach-Object { $_.Home }) }
     foreach ($h in ($homes | Select-Object -Unique)) { Ensure-StatusLine $h }
+    # profils d'équipe : aucune demande de permission, pour aucun Claude (ni les ouvriers ni les Claude du profil) ; l'écran d'avertissement de Claude est écarté
+    if ((Uses-Role $p 'team') -or (@(Claude-Panes $p | Where-Object { "$($_.args)" -match 'bypassPermissions' }).Count)) {
+        foreach ($ac in @($Accounts | Where-Object { $_.Enabled -and (Test-Path -LiteralPath $_.Home) })) { Ensure-BypassAllowed $ac.Home }
+    }
     [void](Install-AllSkills)   # skills FLOW (créer / reprendre / maintenir un projet, répartir les tâches) dans chaque compte
     foreach ($pn in @(Claude-Panes $p)) {
         $a = Acct-For $pn $p

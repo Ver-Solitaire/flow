@@ -19,7 +19,7 @@ param(
     [string]$Accounts,            # id|libellé|couleur|CLAUDE_CONFIG_DIR (vide = ~\.claude)|nom court ; …
     [int]$MaxTasks = 4,
     [string]$TestCommand,         # commande de test lancée sur la branche d'intégration (sinon détectée)
-    [string]$WorkerArgs = '--permission-mode auto',  # chaque ouvrier est isolé dans son worktree ; « auto » : il ne s'arrête pas à chaque commande pour demander la permission
+    [string]$WorkerArgs = '--permission-mode bypassPermissions',  # chaque ouvrier est isolé dans sa copie du projet ; toutes les permissions sont accordées d'avance : aucun ouvrier ne s'arrête pour en demander une
     [int]$AutoStart = 0,          # secondes avant lancement automatique d'un plan sans risque (0 = attendre la validation)
     [switch]$NoReview,            # sans relecture croisée (par défaut : chaque tâche finie est relue par un autre compte)
     [int]$MaxReviews = 2,         # nombre maximal de relectures par tâche

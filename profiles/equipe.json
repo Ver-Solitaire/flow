@@ -16,7 +16,7 @@
     {
       "height": 45,
       "panes": [
-        { "role": "claude", "perAccount": true, "args": "--teammate-mode tmux", "width": 50 },
+        { "role": "claude", "perAccount": true, "args": "--teammate-mode tmux --permission-mode bypassPermissions", "width": 50 },
         { "role": "monitor", "width": 25 },
         { "role": "office", "width": 25 }
       ]

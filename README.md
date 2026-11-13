@@ -251,7 +251,7 @@ Profil **Équipe — multi-comptes** (`profiles\equipe.json`) : la fenêtre Équ
   sur la même chose (réalisateur, testeur qui écrit les tests d'après la spécification, documentation, puis une tâche d'intégration et de
   contre-vérification qui fait passer l'ensemble) ; le brief fixe d'abord les interfaces pour que chacun avance sans attendre ;
 - les ouvriers peuvent **s'écrire directement** : une ligne `@B : …` dans leurs annonces est transmise à B seul, une ligne sans `@` à tous ;
-- ils travaillent en mode `auto` (pas de demande de permission à chaque commande) et n'appellent l'utilisateur qu'en dernier recours ;
+- **toutes les permissions sont accordées d'avance** (mode `bypassPermissions`) aux ouvriers et aux Claude du profil Équipe : aucun ne s'arrête pour demander une autorisation, et ils n'appellent l'utilisateur qu'en dernier recours. Chaque ouvrier reste dans sa propre copie du projet, mais ce mode n'a aucun garde-fou : pour revenir à des demandes de permission, mets `workerArgs` (panneau `team`) et `args` (panneau `claude`) à `--permission-mode auto` dans `profiles\equipe.json` ;
 - le plan **démarre tout seul après 20 secondes** s'il est sans risque (aucun fichier partagé, comptes connectés) ; une touche rend la main
   (`"autoStart": 20` sur le panneau `team` du profil, `0` pour toujours attendre) ;
 - les Claude ordinaires des panneaux confient eux aussi toute demande de travail à l'équipe (skill `taches-repartir`) ;

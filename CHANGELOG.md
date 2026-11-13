@@ -14,7 +14,7 @@
   (`"perAccount": true`) ; bouton « ＋ Ajouter un Claude » (Ctrl+B A, clic droit) ; les Claude répartissent d'eux-mêmes ce qui se découpe.
 - Écran des comptes à la sélection du projet (connexion, doublons d'adresse, retrait d'un compte) ; CLAUDE.md de départ créé pour n'importe quel projet.
 
-- **Équipe autonome** : toujours une équipe, même pour une petite demande (découpage par rôles : réalisateur, testeur, documentation, contre-vérification) ; messages directs entre ouvriers (`@B : …`) ; mode `auto` pour les ouvriers ; lancement automatique du plan sans risque après 20 s (`autoStart`).
+- **Équipe autonome** : toujours une équipe, même pour une petite demande (découpage par rôles : réalisateur, testeur, documentation, contre-vérification) ; messages directs entre ouvriers (`@B : …`) ; toutes les permissions accordées d'avance aux ouvriers et aux Claude du profil Équipe (`bypassPermissions`) ; lancement automatique du plan sans risque après 20 s (`autoStart`).
 
 - **Panneau « échanges »** dans le profil Équipe : ce que les Claude s'écrivent (messages directs, annonces, relectures, conseils), en direct, par compte ; journal `echanges.jsonl`.
 

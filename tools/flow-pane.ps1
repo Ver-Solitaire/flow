@@ -93,7 +93,10 @@ if ($AddClaude) {
     & psmux -L $Sock set -p -t $tgt '@flow_acct' $ac.Id *> $null
     & psmux -L $Sock set -p -t $tgt '@flow_spec' (ConvertTo-Json -Compress ([pscustomobject]@{ role = 'claude'; account = $ac.Id })) *> $null
     $acctEnv = if ($ac.Dir) { "`$env:CLAUDE_CONFIG_DIR = $(Q $ac.Dir); " } else { 'Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue; ' }
-    $cmd = "Set-Location -LiteralPath $(Q $cwd); $(Auth-Strip)${acctEnv}Clear-Host; claude"
+    # dans une session d'équipe, le nouveau Claude a lui aussi toutes les permissions d'avance (comme les autres)
+    $team = @(& psmux -L $Sock list-panes -s -t $sess -F '#{@flow_spec}' | Where-Object { $_ -match '"role"\s*:\s*"team"' }).Count -gt 0
+    $perm = if ($team) { ' --permission-mode bypassPermissions' } else { '' }
+    $cmd = "Set-Location -LiteralPath $(Q $cwd); $(Auth-Strip)${acctEnv}Clear-Host; claude$perm"
     & psmux -L $Sock send-keys -t $tgt -l $cmd *> $null
     & psmux -L $Sock send-keys -t $tgt Enter *> $null
     Say "FLOW : Claude « $($ac.Label) » ajouté"
