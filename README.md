@@ -244,7 +244,18 @@ avec le gestionnaire d'identifiants de Git ou `gh auth login` puis `gh auth setu
 
 ## Équipe : un prompt, plusieurs Claude en parallèle
 
-Profil **Équipe — multi-comptes** (`profiles\equipe.json`) : à gauche la fenêtre Équipe, à droite le moniteur.
+Profil **Équipe — multi-comptes** (`profiles\equipe.json`) : la fenêtre Équipe, le moniteur, un Claude par compte connecté et le Bureau.
+
+**Une vraie équipe, toujours.** Quelle que soit la demande, même minuscule, les Claude travaillent ensemble :
+- une demande qui se découpe est répartie par morceaux ; une demande petite ou indivisible est répartie par **rôles** qui avancent en parallèle
+  sur la même chose (réalisateur, testeur qui écrit les tests d'après la spécification, documentation, puis une tâche d'intégration et de
+  contre-vérification qui fait passer l'ensemble) ; le brief fixe d'abord les interfaces pour que chacun avance sans attendre ;
+- les ouvriers peuvent **s'écrire directement** : une ligne `@B : …` dans leurs annonces est transmise à B seul, une ligne sans `@` à tous ;
+- ils travaillent en mode `auto` (pas de demande de permission à chaque commande) et n'appellent l'utilisateur qu'en dernier recours ;
+- le plan **démarre tout seul après 20 secondes** s'il est sans risque (aucun fichier partagé, comptes connectés) ; une touche rend la main
+  (`"autoStart": 20` sur le panneau `team` du profil, `0` pour toujours attendre) ;
+- les Claude ordinaires des panneaux confient eux aussi toute demande de travail à l'équipe (skill `taches-repartir`) ;
+- rien n'arrive dans ton projet sans ta validation finale.
 
 1. **Demande** : tu écris ton prompt (Entrée = nouvelle ligne, **F5** ou **Ctrl+D** = envoyer).
 2. **Plan** : un Claude planificateur (compte le moins chargé, lecture seule) explore le projet et propose

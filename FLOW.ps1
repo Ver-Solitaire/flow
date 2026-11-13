@@ -739,10 +739,11 @@ function Team-Accounts {
 function Team-Hint {
     # consigne ajoutée aux Claude lancés par FLOW quand plusieurs comptes sont déclarés
     $n = @($Accounts | Where-Object { $_.Enabled }).Count
-    "Contexte FLOW : $n comptes Claude sont disponibles et chacun peut faire travailler un Claude en parallèle. " +
-    "Quand la demande de l'utilisateur comporte plusieurs morceaux qui peuvent avancer en même temps (fonctionnalités séparées, code + tests + documentation, plusieurs modules), " +
-    "ne la fais pas seul : utilise le skill taches-repartir pour la découper et la répartir sur tous les comptes (l'utilisateur valide le plan dans la fenêtre Équipe). " +
-    "Si la demande est petite ou indivisible, fais-la toi-même et dis en une phrase pourquoi tu ne la répartis pas."
+    "Contexte FLOW : $n comptes Claude sont disponibles et forment une équipe autonome. " +
+    "Toute demande de travail de l'utilisateur (créer, modifier, corriger, analyser du code ou des fichiers), même petite, est confiée à l'équipe : " +
+    "utilise le skill taches-repartir pour la découper (par morceaux, ou par rôles réalisateur / testeur / documentation / contre-vérification quand elle est petite) " +
+    "et la répartir sur tous les comptes ; l'équipe démarre d'elle-même après un court délai. " +
+    "Ne traite seul que les simples questions, explications et échanges de conversation."
 }
 
 function Pane-Command($pane, $p) {
@@ -767,6 +768,7 @@ function Pane-Command($pane, $p) {
             $accs = Team-Accounts
             $opt = ''
             if ($pane.maxTasks) { $opt += " -MaxTasks $([int]$pane.maxTasks)" }
+            if ($pane.autoStart) { $opt += " -AutoStart $([int]$pane.autoStart)" }   # secondes avant lancement automatique d'un plan sans risque
             if ($pane.testCommand) { $opt += " -TestCommand $(Q ([string]$pane.testCommand))" }
             if ($pane.workerArgs) { $opt += " -WorkerArgs $(Q ([string]$pane.workerArgs))" }
             if ($pane.review -eq $false) { $opt += ' -NoReview' }                     # "review": false = sans relecture croisée

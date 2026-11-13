@@ -19,7 +19,8 @@ param(
     [string]$Accounts,            # id|libellé|couleur|CLAUDE_CONFIG_DIR (vide = ~\.claude)|nom court ; …
     [int]$MaxTasks = 4,
     [string]$TestCommand,         # commande de test lancée sur la branche d'intégration (sinon détectée)
-    [string]$WorkerArgs = '--permission-mode acceptEdits',  # chaque ouvrier est isolé dans son worktree
+    [string]$WorkerArgs = '--permission-mode auto',  # chaque ouvrier est isolé dans son worktree ; « auto » : il ne s'arrête pas à chaque commande pour demander la permission
+    [int]$AutoStart = 0,          # secondes avant lancement automatique d'un plan sans risque (0 = attendre la validation)
     [switch]$NoReview,            # sans relecture croisée (par défaut : chaque tâche finie est relue par un autre compte)
     [int]$MaxReviews = 2,         # nombre maximal de relectures par tâche
     [switch]$LoadOnly             # charge les fonctions sans lancer l'écran (tests)
@@ -483,7 +484,7 @@ function Use-Run($st) {
     # équipes créées avant l'ajout des modèles / du conseiller : champs manquants complétés
     foreach ($t in @($st.tasks)) {
         foreach ($kv in @(@('model', 'sonnet'), @('why', ''), @('advisor', ''), @('advice', 0), @('helpSeen', ''),
-                          @('review', ''), @('reviews', 0), @('reviewSeen', ''), @('reviewer', ''), @('annSeen', ''))) {
+                          @('review', ''), @('reviews', 0), @('reviewSeen', ''), @('reviewer', ''), @('annSeen', ''), @('annLines', 0))) {
             if ($null -eq $t.($kv[0])) { $t | Add-Member -NotePropertyName $kv[0] -NotePropertyValue $kv[1] -Force }
         }
     }
@@ -542,9 +543,16 @@ $request
 $more
 Ton travail :
 1. Explore le projet en lecture seule (Read, Grep, Glob), juste assez pour savoir où intervenir.
-2. Découpe la demande en tâches : au plus $MaxTasks. Chaque compte connecté doit avoir de quoi travailler : avec $n compte(s),
-   vise au moins $n tâches indépendantes dès que la demande s'y prête. Si la demande est vraiment indivisible, fais UNE seule
-   tâche (l'autre compte la relira) : ne découpe jamais artificiellement, ne fabrique pas de tâche vide pour occuper un compte.
+2. Tu composes TOUJOURS une équipe, quelle que soit la demande, même petite : au plus $MaxTasks tâches et, s'il y a $n compte(s),
+   au moins $n tâches, pour que tous les Claude travaillent ENSEMBLE sur la demande, de façon autonome.
+   - Demande qui se découpe par morceaux (fonctionnalités, modules, fichiers) : une tâche par morceau.
+   - Demande petite ou indivisible par fichiers : découpe par RÔLES qui avancent en parallèle sur la même chose. Par exemple :
+     « réalisateur » (écrit le code), « testeur » (écrit les tests à partir de la SPÉCIFICATION du brief, sans voir le code : il fixe ce qui
+     est attendu), « documentation et exemples » ; puis, en dépendance de ces tâches, une tâche « intégration et contre-vérification »
+     (fait passer l'ensemble, cherche les cas limites qui cassent, corrige l'écart entre le code et les tests).
+   - Le brief fixe D'ABORD les interfaces et les décisions communes (noms, signatures, formats, emplacement des fichiers) pour que chacun
+     avance seul, sans attendre les autres et sans solliciter l'utilisateur.
+   - Chaque fichier appartient à UNE seule tâche ; n'utilise « depends » qu'au strict nécessaire.
 3. Règles :
    - chaque tâche est autonome, précise et vérifiable ;
    - un fichier appartient à UNE seule tâche ; si deux tâches doivent toucher le même fichier, la seconde
@@ -645,8 +653,14 @@ Tu travailles dans TA copie du dépôt : $wt (branche $br). Les autres travaille
 - Si tu prends une décision qui concerne les autres (un nom, une signature, un format, un fichier partagé que tu as dû
   toucher, un écart par rapport au brief), ANNONCE-LA tout de suite : ajoute quelques lignes datées dans
   $(Announce-File $t.id). FLOW prévient aussitôt les autres ouvriers. N'annonce que ce qui change leur travail.
-- Les messages qui commencent par « [FLOW] Info équipe » ou « [FLOW] Annonce » viennent de tes coéquipiers : tiens-en
-  compte si ta tâche est concernée, sinon continue sans t'interrompre.
+- Les messages qui commencent par « [FLOW] Info équipe », « [FLOW] Annonce » ou « [FLOW] Message » viennent de tes coéquipiers :
+  tiens-en compte si ta tâche est concernée, sinon continue sans t'interrompre.
+- Tu es membre d'une VRAIE équipe autonome : tu peux parler DIRECTEMENT à un coéquipier. Dans ton fichier d'annonces, commence la ligne par
+  @ suivi de la lettre de sa tâche (ex. « @B : ta fonction doit renvoyer une liste, pas un tuple »). Elle lui est transmise tout de suite,
+  à lui seul. Sans @, elle va à tous. Si un coéquipier te pose une question ([FLOW] Message de X), réponds-lui par une ligne « @X : … »
+  avant de continuer.
+- Autonomie : décide, avance et note tes décisions (annonce si elles touchent les autres). Ne sollicite l'utilisateur qu'en dernier
+  recours, quand une information indispensable n'existe nulle part (ni dans le brief, ni dans le code, ni chez un coéquipier).
 $rev
 
 ## Si la tâche devient trop complexe
@@ -1240,7 +1254,7 @@ function Apply-Plan($plan) {
             model = $model; why = [string]$p.why
             account = ''; status = 'pending'; worktree = ''; error = ''; live = ''; startedAt = ''; doneAt = ''
             advisor = ''; advice = 0; helpSeen = ''
-            review = ''; reviews = 0; reviewSeen = ''; reviewer = ''; annSeen = ''
+            review = ''; reviews = 0; reviewSeen = ''; reviewer = ''; annSeen = ''; annLines = 0
         }
         $i++
     }
@@ -1271,6 +1285,9 @@ function Plan-Warnings {
 
 function Mode-Plan {
     $sel = 0
+    # lancement automatique (-AutoStart) : seulement pour un plan sans risque (aucun fichier partagé, tous les comptes utilisés sont connectés)
+    $autoAt = $null
+    if ($AutoStart -gt 0 -and -not @(Plan-Warnings).Count -and -not @(Missing-Accounts | Where-Object { $_.Id -in @($State.tasks.account) }).Count) { $autoAt = (Get-Date).AddSeconds($AutoStart) }
     Cls
     while ($true) {
         $W = [Math]::Max(40, (ConW) - 1)
@@ -1303,6 +1320,7 @@ function Mode-Plan {
             $L.Add("  $Warn⚠ $(($miss.Label) -join ', ') : non connecté$(if ($onMiss.Count) { " — tâche(s) $(($onMiss.id) -join ', ') à réattribuer" } else { ' — tout est réparti sur les comptes connectés' }) · C pour le connecter$R")
         }
         $L.Add("  $Dm relecture croisée : $(if ($State.crossReview) { 'activée — chaque tâche finie est relue par un Claude d''un autre compte avant la fusion' } else { 'désactivée' }) · V pour changer$R")
+        if ($autoAt) { $L.Add("  $Teal$B⏱ lancement automatique dans $([int][Math]::Max(0, [Math]::Ceiling(($autoAt - (Get-Date)).TotalSeconds))) s$R $Dm— appuie sur une touche pour garder la main et modifier le plan$R") }
         $L.Add('')
         $L.Add((Keys @('Entrée', 'lancer l''équipe', 'Tab', 'compte', 'M', 'modèle', 'A', 'répartir', 'C', 'comptes', 'E', 'modifier le plan', 'R', 'replanifier', 'Échap', 'abandonner')))
         $L.Add("  $Dm clic : choisir une tâche · clic sur ◆ compte ou ◇ modèle : le changer$R")
@@ -1312,7 +1330,15 @@ function Mode-Plan {
             Add-Zone $pz.Y $pz.Y $pz.XA $pz.XA2 @{ Row = $pz.Row; What = 'account' }
             Add-Zone $pz.Y $pz.Y $pz.XM $pz.XM2 @{ Row = $pz.Row; What = 'model' }
         }
-        $act = Read-Action -Wait
+        if ($autoAt) {
+            # compte à rebours : sans touche, le plan part tout seul ; une touche (hors redimensionnement) rend la main
+            $act = Read-Action -Wait -TimeoutMs 1000
+            if (-not $act) {
+                if ((Get-Date) -lt $autoAt) { continue }
+                $act = @{ K = (Fake-Key 'Enter') }
+            }
+            elseif (-not $act.Resize) { $autoAt = $null }
+        } else { $act = Read-Action -Wait }
         if ($act.Click) {
             # (pas de « continue » dans un switch : il ne relancerait pas la boucle)
             $sel = $act.Click.Row; $t = $ts[$sel]
@@ -1574,6 +1600,34 @@ function Check-Reviews {
     $note
 }
 
+function Relay-Announcements($t) {
+    # Les lignes nouvelles du fichier d'annonces d'un ouvrier sont transmises aux autres : une ligne qui nomme un coéquipier
+    # (« @B : … ») va à lui seul, les autres à tous les ouvriers encore au travail. Renvoie le nombre de messages transmis.
+    $f = Announce-File $t.id
+    if (-not (Test-Path -LiteralPath $f)) { return 0 }
+    $lines = @(Get-Content -LiteralPath $f -Encoding utf8 -ErrorAction SilentlyContinue | Where-Object { "$_".Trim() })
+    $seen = [int]$t.annLines
+    if ($lines.Count -le $seen) { return 0 }
+    $t | Add-Member -NotePropertyName annLines -NotePropertyValue $lines.Count -Force
+    $ids = @($State.tasks | ForEach-Object { $_.id })
+    $n = 0
+    foreach ($l in @($lines | Select-Object -Skip $seen)) {
+        $txt = ($l -replace '\s+', ' ').Trim(); if ($txt.Length -gt 400) { $txt = $txt.Substring(0, 399) + '…' }
+        $to = @([regex]::Matches($txt, '@([A-Za-z0-9_-]+)') | ForEach-Object { $_.Groups[1].Value } | Where-Object { $_ -in $ids -and $_ -ne $t.id } | Select-Object -Unique)
+        if ($to.Count) {
+            foreach ($d in $to) {
+                $dest = Task-ById $d
+                if ($dest.status -eq 'running' -and (Send-ToPane $d "[FLOW] Message de l'ouvrier $($t.id) ($($t.title)) pour toi : « $txt ». Si besoin, réponds-lui par une ligne « @$($t.id) : … » dans ton fichier d'annonces $(Announce-File $d).")) { $n++ }
+            }
+        } else {
+            Tell-Others $t.id "[FLOW] Annonce de l'ouvrier $($t.id) ($($t.title)) : « $txt ». Si elle concerne ta tâche, adapte-toi ; sinon continue sans t'interrompre."
+            $n++
+        }
+    }
+    Write-FlowLog "annonces de $($t.id) : $n message(s) transmis"
+    $n
+}
+
 function Tell-Others([string]$fromId, [string]$text) {
     # message aux autres ouvriers encore au travail (écrit dans leur panneau)
     foreach ($o in @($State.tasks | Where-Object { $_.id -ne $fromId -and $_.status -eq 'running' })) { [void](Send-ToPane $o.id $text) }
@@ -1672,8 +1726,8 @@ function Mode-Run {
                     $as = [string](Get-Item -LiteralPath (Announce-File $t.id)).LastWriteTimeUtc.Ticks
                     if ($as -ne [string]$t.annSeen) {
                         $t.annSeen = $as
-                        Tell-Others $t.id "[FLOW] Annonce de l'ouvrier $($t.id) ($($t.title)) : lis $(Announce-File $t.id) (dernières lignes). Si elle concerne ta tâche, adapte-toi ; sinon continue sans t'interrompre."
-                        $msg = "$Info⇄ annonce de $($t.id) relayée aux autres ouvriers$R"
+                        $sent = Relay-Announcements $t
+                        if ($sent) { $msg = "$Info⇄ $sent message(s) de $($t.id) transmis à l'équipe$R" }
                     }
                 }
                 # besoin d'un conseiller ? (question écrite par l'ouvrier, ou erreurs à la chaîne)

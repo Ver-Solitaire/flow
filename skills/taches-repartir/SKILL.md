@@ -18,14 +18,24 @@ d'un autre compte** (relecture croisée) qui renvoie ses corrections à l'ouvrie
 Toi, tu ne peux pas écrire aux autres Claude ni piloter leurs panneaux : le plan est ton seul
 canal. Tout ce qu'un ouvrier doit savoir au départ doit donc s'y trouver.
 
-## 1. Vérifier que ça vaut la peine
+## 1. Toujours en équipe
 
-Répartir a un coût : chaque ouvrier relit le projet, et les morceaux doivent être fusionnés. Ça
-paie quand la demande contient **plusieurs morceaux indépendants** (des fonctionnalités séparées,
-le code et ses tests et sa documentation, plusieurs modules à migrer de la même façon).
+Avec plusieurs comptes connectés, **toute demande de travail passe par l'équipe**, même petite : tous
+les Claude travaillent ensemble, de façon autonome. Seules les questions, explications et échanges de
+conversation se traitent seul.
 
-Si la demande est petite, ou si tout passe par les mêmes fichiers, dis-le simplement et propose de
-la faire toi-même directement : une seule tâche bien faite vaut mieux qu'un découpage artificiel.
+- **La demande se découpe par morceaux** (fonctionnalités séparées, plusieurs modules, plusieurs
+  fichiers) : une tâche par morceau.
+- **Elle est petite ou indivisible par fichiers** : découpe par **rôles** qui avancent en parallèle sur
+  la même chose — un *réalisateur* (le code), un *testeur* (écrit les tests à partir de la
+  spécification du brief, sans voir le code : il fixe ce qui est attendu), de la *documentation et des
+  exemples* ; puis, en dépendance, une tâche d'*intégration et de contre-vérification* qui fait passer
+  l'ensemble et cherche les cas limites. Le brief fixe d'abord l'interface (noms, signatures, formats),
+  pour que chacun avance sans attendre les autres.
+
+Ne crée jamais une tâche vide pour occuper un compte : chaque rôle doit produire quelque chose de
+vérifiable. Les ouvriers peuvent s'écrire directement (une ligne « @B : … » dans leurs annonces) et
+n'appellent l'utilisateur qu'en dernier recours.
 
 Vérifie aussi le terrain :
 - le projet est un dépôt Git avec au moins un commit (`git status`). Sinon, propose de

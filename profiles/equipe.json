@@ -9,7 +9,7 @@
     {
       "height": 60,
       "panes": [
-        { "role": "team", "width": 62, "focus": true },
+        { "role": "team", "width": 62, "focus": true, "autoStart": 20 },
         { "role": "monitor", "width": 38 }
       ]
     },
