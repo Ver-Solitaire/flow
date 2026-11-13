@@ -18,8 +18,10 @@ param(
     [string]$Login,             # FLOW.ps1 -Login second : ouvre Claude avec ce compte pour s'y connecter
     [string]$Team,              # FLOW.ps1 -Team C:\mon\projet : session Équipe sur ce projet (sans créer de profil)
     [switch]$Demo,              # FLOW.ps1 -Demo : démonstration avec activité simulée (moniteur, Bureau, personnages)
-    [switch]$TeamDemo           # FLOW.ps1 -TeamDemo : simulation de la fenêtre Équipe (prompt → plan → ouvriers → fusion)
+    [switch]$TeamDemo,          # FLOW.ps1 -TeamDemo : simulation de la fenêtre Équipe (prompt → plan → ouvriers → fusion)
+    [switch]$ShareDemo          # FLOW.ps1 -ShareDemo : démonstration des bibliothèques de profils partagés
 )
+if ($ShareDemo) { & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'tools\flow-share-demo.ps1'); return }
 if ($Demo) { & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'tools\flow-demo.ps1'); return }
 if ($TeamDemo) { & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'tools\flow-team-demo.ps1'); return }
 

@@ -12,7 +12,8 @@ partage une demande, et un « Bureau » où chaque agent est un petit personnage
    le raccourci « FLOW » sur le bureau, propose de configurer l'identité Git et de te connecter à Claude.
    (`install.cmd -Yes` : sans questions · `install.cmd -WithGitHubCli` : ajoute GitHub CLI.)
 3. Lance FLOW avec le raccourci du bureau. Pour découvrir sans rien risquer :
-   `pwsh -File FLOW.ps1 -Demo` (Bureau et moniteur) et `pwsh -File FLOW.ps1 -TeamDemo` (fenêtre Équipe).
+   `pwsh -File FLOW.ps1 -Demo` (Bureau et moniteur) et `pwsh -File FLOW.ps1 -TeamDemo` (fenêtre Équipe)
+   et `pwsh -File FLOW.ps1 -ShareDemo` (profils partagés : deux bibliothèques, un collègue qui publie pendant la démo).
 
 Prérequis : Windows 10/11 avec `winget` (« App Installer » du Microsoft Store).
 
