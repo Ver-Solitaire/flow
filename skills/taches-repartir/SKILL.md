@@ -52,7 +52,9 @@ Règles, et leur raison :
   commande qui renvoie tel résultat, page qui affiche telle chose).
 - **Préfère l'indépendance.** N'utilise `depends` que par nécessité : une chaîne de dépendances
   n'est plus du travail en parallèle.
-- **Peu de tâches.** Deux à quatre en général (huit au plus). Des tâches de taille comparable se
+- **Autant de tâches que de comptes, quand c'est possible.** Chaque compte connecté doit avoir de quoi travailler : avec 2 comptes, vise au
+  moins 2 tâches indépendantes dès que la demande s'y prête (une seule tâche n'est acceptable que si la demande est indivisible ; l'autre
+  compte la relira alors). Deux à quatre tâches en général (huit au plus). Des tâches de taille comparable se
   terminent ensemble ; une tâche minuscule peut se fondre dans sa voisine.
 - **Pense au raccord.** Le relecteur de chaque tâche vérifie qu'elle s'emboîte avec les autres en
   s'appuyant sur le brief : plus les points de contact y sont précis, plus la relecture est utile.

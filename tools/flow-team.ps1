@@ -539,8 +539,9 @@ $request
 $more
 Ton travail :
 1. Explore le projet en lecture seule (Read, Grep, Glob), juste assez pour savoir où intervenir.
-2. Découpe la demande en tâches : au plus $MaxTasks. Si la demande est petite ou ne se parallélise pas bien,
-   fais UNE seule tâche : ne découpe jamais artificiellement.
+2. Découpe la demande en tâches : au plus $MaxTasks. Chaque compte connecté doit avoir de quoi travailler : avec $n compte(s),
+   vise au moins $n tâches indépendantes dès que la demande s'y prête. Si la demande est vraiment indivisible, fais UNE seule
+   tâche (l'autre compte la relira) : ne découpe jamais artificiellement, ne fabrique pas de tâche vide pour occuper un compte.
 3. Règles :
    - chaque tâche est autonome, précise et vérifiable ;
    - un fichier appartient à UNE seule tâche ; si deux tâches doivent toucher le même fichier, la seconde

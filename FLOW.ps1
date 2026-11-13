@@ -23,6 +23,7 @@ param(
     [string]$Team,              # FLOW.ps1 -Team C:\mon\projet : session Équipe sur ce projet (sans créer de profil)
     [switch]$InstallSkills,     # FLOW.ps1 -InstallSkills : (ré)installe les skills FLOW dans chaque compte Claude
     [switch]$Doctor,            # FLOW.ps1 -Doctor : contrôle l'installation, les comptes et les sessions, et dit quoi faire
+    [switch]$LoadOnly,          # charge les fonctions sans lancer l'écran (tests)
     [string]$Project,           # FLOW.ps1 -Project C:\mon\projet : les profils s'ouvrent dans ce projet
     [switch]$Demo,              # FLOW.ps1 -Demo : démonstration avec activité simulée (moniteur, Bureau, personnages)
     [switch]$TeamDemo,          # FLOW.ps1 -TeamDemo : simulation de la fenêtre Équipe (prompt → plan → ouvriers → fusion)
@@ -709,11 +710,24 @@ function Team-Accounts {
     (@($Accounts | Where-Object { $_.Enabled } | ForEach-Object { "$($_.Id)|$($_.Label)|$($_.Hex)|$($_.Dir)|$($_.Short)" })) -join ';'
 }
 
+function Team-Hint {
+    # consigne ajoutée aux Claude lancés par FLOW quand plusieurs comptes sont déclarés
+    $n = @($Accounts | Where-Object { $_.Enabled }).Count
+    "Contexte FLOW : $n comptes Claude sont disponibles et chacun peut faire travailler un Claude en parallèle. " +
+    "Quand la demande de l'utilisateur comporte plusieurs morceaux qui peuvent avancer en même temps (fonctionnalités séparées, code + tests + documentation, plusieurs modules), " +
+    "ne la fais pas seul : utilise le skill taches-repartir pour la découper et la répartir sur tous les comptes (l'utilisateur valide le plan dans la fenêtre Équipe). " +
+    "Si la demande est petite ou indivisible, fais-la toi-même et dis en une phrase pourquoi tu ne la répartis pas."
+}
+
 function Pane-Command($pane, $p) {
     $cd = PCwd $p $pane
     $pre = "Set-Location -LiteralPath $(Q $cd); " + (Acct-Env (Acct-For $pane $p))
     switch ([string]$pane.role) {
-        'claude'  { return ("${pre}Clear-Host; claude $($pane.args)").TrimEnd() }
+        'claude'  {
+            # plusieurs comptes : ce Claude répartit lui-même les demandes qui s'y prêtent (skill taches-repartir) au lieu de tout faire seul
+            $hint = if (Multi-Accounts) { " --append-system-prompt $(Q (Team-Hint))" } else { '' }
+            return ("${pre}Clear-Host; claude$hint $($pane.args)").TrimEnd()
+        }
         'monitor' {
             $notify = if ($pane.notify -eq $false) { ' -NotifyAfter -1' } elseif ($null -ne $pane.notifyAfter) { " -NotifyAfter $([int]$pane.notifyAfter)" } else { '' }
             return ("${pre}Clear-Host; pwsh -NoProfile -File $(Q (Join-Path $Tools 'claude-monitor.ps1')) -Latest -Watch $(Q (Watch-Arg $p $pane)) -Sock $Sock -Session $(Q (SessionName $p))$notify $($pane.args)").TrimEnd()
@@ -2126,6 +2140,7 @@ function Show-Selector([string]$msg, [string]$selectId) {
 }
 
 # ───────────────────────── main ─────────────────────────
+if ($LoadOnly) { return }   # tests : les fonctions sont chargées, l'écran n'est pas lancé
 if ($InstallShortcut) { "Raccourci : $(Install-Shortcut)"; return }
 
 $Accounts = Get-Accounts
