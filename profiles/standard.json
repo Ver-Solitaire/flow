@@ -8,17 +8,31 @@
   "claudeConfigDir": null,
   "rows": [
     {
-      "height": 75,
+      "height": 65,
       "panes": [
-        { "role": "monitor", "width": 50 },
-        { "role": "claude", "width": 50, "args": "--teammate-mode tmux", "focus": true }
+        {
+          "role": "monitor",
+          "width": 50
+        },
+        {
+          "role": "claude",
+          "args": "--teammate-mode tmux",
+          "width": 50,
+          "focus": true
+        }
       ]
     },
     {
-      "height": 25,
+      "height": 35,
       "panes": [
-        { "role": "office", "width": 50 },
-        { "role": "shell", "width": 50 }
+        {
+          "role": "office",
+          "width": 50
+        },
+        {
+          "role": "shell",
+          "width": 50
+        }
       ]
     }
   ]

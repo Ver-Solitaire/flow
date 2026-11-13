@@ -10,6 +10,10 @@
 - **`FLOW.ps1 -Doctor`** : diagnostic (outils, comptes, fichiers, sessions, journal) ; journal `config\flow.log`.
 - **Tests** (Pester 5, `tests\run.ps1`) et garde-fous contre les pièges PowerShell déjà rencontrés ; `VERSION`, `CLAUDE.md`.
 
+- **Les comptes ne sont plus liés aux profils** : les profils « Équipe — multi-comptes » et « Un Claude par compte » ouvrent un Claude par compte connecté
+  (`"perAccount": true`) ; bouton « ＋ Ajouter un Claude » (Ctrl+B A, clic droit) ; les Claude répartissent d'eux-mêmes ce qui se découpe.
+- Écran des comptes à la sélection du projet (connexion, doublons d'adresse, retrait d'un compte) ; CLAUDE.md de départ créé pour n'importe quel projet.
+
 ### Corrigé
 - Les ouvriers de l'équipe ne démarraient pas seuls : la consigne passait après `--add-dir` et était prise pour un dossier.
 - Livraison, abandon et nettoyage ne détruisent plus de travail : sauvegarde des fichiers non commités, branches des tâches non intégrées conservées sous `refs/flow-archive/…`.

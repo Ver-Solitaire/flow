@@ -216,6 +216,9 @@ function Accounts-Line {
             })) -join '  '
 }
 
+# nombre de tâches maximal : 4 au minimum, et de quoi occuper chaque compte connecté (2 par compte) sauf réglage explicite (-MaxTasks)
+if (-not $PSBoundParameters.ContainsKey('MaxTasks')) { $MaxTasks = [Math]::Max(4, 2 * @(Usable-Accounts).Count) }
+
 # ───────────────────────── dépôt & équipe ─────────────────────────
 $RepoRoot = $null; $RunDir = $null; $WtRoot = $null; $State = $null
 $Psmux = $Sock -and $Session -and (Get-Command psmux -ErrorAction SilentlyContinue)

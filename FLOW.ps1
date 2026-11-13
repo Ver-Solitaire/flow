@@ -558,8 +558,34 @@ function Acct-For($pane, $p) {
 
 function Multi-Accounts { @($Accounts | Where-Object { $_.Enabled }).Count -gt 1 }
 
+function Expand-Rows($p) {
+    # Les comptes ne sont liés à aucun profil : un panneau « "perAccount": true » devient UN panneau par compte connecté
+    # (autant qu'il y en a), ou un seul sur le compte par défaut si aucun n'est connecté.
+    $conn = @($Accounts | Where-Object { $_.Enabled -and $_.Logged })
+    if (-not $conn.Count) { $conn = @(Default-Acct) }
+    foreach ($row in @($p.rows)) {
+        $panes = foreach ($pn in @($row.panes)) {
+            if ($pn.perAccount -eq $true) {
+                $w = [double]$(if ($pn.width) { $pn.width } else { 1 }) / $conn.Count
+                for ($i = 0; $i -lt $conn.Count; $i++) {
+                    $c = $pn.PSObject.Copy()
+                    $c.PSObject.Properties.Remove('perAccount')
+                    $c | Add-Member -NotePropertyName account -NotePropertyValue $conn[$i].Id -Force
+                    $c | Add-Member -NotePropertyName width -NotePropertyValue $w -Force
+                    $c | Add-Member -NotePropertyName fromPerAccount -NotePropertyValue $true -Force
+                    if ($i -gt 0 -and $c.PSObject.Properties['focus']) { $c.PSObject.Properties.Remove('focus') }
+                    $c
+                }
+            } else { $pn }
+        }
+        $nr = $row.PSObject.Copy()
+        $nr | Add-Member -NotePropertyName panes -NotePropertyValue @($panes) -Force
+        $nr
+    }
+}
+
 function Claude-Panes($p) {
-    foreach ($row in @($p.rows)) { foreach ($pn in @($row.panes)) { if ([string]$pn.role -eq 'claude') { $pn } } }
+    foreach ($row in @(Expand-Rows $p)) { foreach ($pn in @($row.panes)) { if ([string]$pn.role -eq 'claude') { $pn } } }
 }
 
 function Bad-Accounts($p) {
@@ -616,8 +642,8 @@ $Presets = @(
     [pscustomobject]@{ Name = 'Claude + terminal'; Desc = 'Claude en haut, un terminal en bas'; Rows = '[{"height":75,"panes":[{"role":"claude","width":100,"focus":true}]},{"height":25,"panes":[{"role":"shell","width":100}]}]' }
     [pscustomobject]@{ Name = 'Grille 2×2'; Desc = 'Claude, moniteur et deux terminaux'; Rows = '[{"height":60,"panes":[{"role":"claude","width":60,"focus":true},{"role":"monitor","width":40}]},{"height":40,"panes":[{"role":"shell","width":60},{"role":"shell","width":40}]}]' }
     [pscustomobject]@{ Name = 'Claude seul'; Desc = 'un seul panneau plein écran'; Rows = '[{"height":100,"panes":[{"role":"claude","width":100,"focus":true}]}]' }
-    [pscustomobject]@{ Name = 'Équipe multi-comptes'; Desc = 'prompt découpé en tâches + un Claude général (Git requis)'; Rows = '[{"height":66,"panes":[{"role":"team","width":38,"focus":true},{"role":"claude","width":37},{"role":"monitor","width":25}]},{"height":34,"panes":[{"role":"office","width":100}]}]' }
-    [pscustomobject]@{ Name = 'Duo — 2 comptes'; Desc = 'moniteur partagé + un Claude par compte, un terminal'; Rows = '[{"height":75,"panes":[{"role":"monitor","width":30},{"role":"claude","account":"principal","width":35,"focus":true},{"role":"claude","account":"second","width":35}]},{"height":25,"panes":[{"role":"office","width":50},{"role":"shell","width":50}]}]' }
+    [pscustomobject]@{ Name = 'Équipe multi-comptes'; Desc = 'prompt découpé en tâches réparties sur tous tes comptes connectés + un Claude par compte (Git requis)'; Rows = '[{"height":60,"panes":[{"role":"team","width":62,"focus":true},{"role":"monitor","width":38}]},{"height":40,"panes":[{"role":"claude","perAccount":true,"args":"--teammate-mode tmux","width":62},{"role":"office","width":38}]}]' }
+    [pscustomobject]@{ Name = 'Un Claude par compte'; Desc = 'moniteur partagé + un Claude par compte connecté (autant que tu en as), Bureau et terminal'; Rows = '[{"height":75,"panes":[{"role":"monitor","width":30},{"role":"claude","perAccount":true,"args":"--teammate-mode tmux","width":70,"focus":true}]},{"height":25,"panes":[{"role":"office","width":50},{"role":"shell","width":50}]}]' }
 )
 
 # ───────────────────────── psmux ─────────────────────────
@@ -773,6 +799,8 @@ function Start-FlowProfile($p) {
     if (Test-Session $s) { Step "session déjà ouverte : rattachement"; return $s }
 
     $script:Accounts = Get-Accounts
+    # les panneaux « perAccount » deviennent un Claude par compte connecté (le profil d'origine n'est pas modifié)
+    $p = $p.PSObject.Copy(); $p | Add-Member -NotePropertyName rows -NotePropertyValue @(Expand-Rows $p) -Force
     $bad = Bad-Accounts $p
     if ($bad.Count) { throw "compte(s) inconnu(s) dans le profil : $($bad -join ', ') — voir config\accounts.json" }
     # barre de statut (limites pour le moniteur) branchée sur chaque compte utilisé ou affiché
@@ -826,7 +854,9 @@ function Start-FlowProfile($p) {
         & psmux -L $Sock set -p -t $x.T '@flow_role' $title *> $null
         & psmux -L $Sock set -p -t $x.T '@flow_base' $title *> $null
         # description du panneau : suit le panneau quand on le déplace, sert à enregistrer la disposition
-        $spec = $x.Pane | Select-Object * -ExcludeProperty width, focus
+        # le panneau d'un compte ajouté automatiquement se réenregistre sous sa forme d'origine (« perAccount »), pas avec son compte
+        $spec = if ($x.Pane.fromPerAccount) { $x.Pane | Select-Object * -ExcludeProperty width, focus, account, fromPerAccount | Add-Member -NotePropertyName perAccount -NotePropertyValue $true -PassThru }
+                else { $x.Pane | Select-Object * -ExcludeProperty width, focus }
         & psmux -L $Sock set -p -t $x.T '@flow_spec' ($spec | ConvertTo-Json -Compress -Depth 8) *> $null
         if ([string]$x.Pane.role -eq 'claude') {
             # repère pour le moniteur : il ajoute l'état de Claude dans la bordure de ce panneau
@@ -877,6 +907,13 @@ function Bind-PaneKeys {
         'Enregistrer la disposition', 'w', "run-shell '$(& $run '-Save')'",
         '', '', '',
         'Équipe : répartir une demande en tâches', 't', "run-shell '$(& $run '-Team')'")
+    # « Ajouter un Claude » : un bouton par compte déclaré (menu clic droit, ou Ctrl+B puis A)
+    $add = @(); $kk = 1
+    foreach ($ac in @($Accounts | Where-Object { $_.Enabled })) { $add += @("＋ Ajouter un Claude : $($ac.Label)", "$kk", "run-shell '$(& $run "-AddClaude $($ac.Id)")'"); $kk++ }
+    if ($add.Count) {
+        $menu += @('', '', '') + $add
+        & psmux -L $Sock bind-key -T prefix A display-menu -T ' Ajouter un Claude ' @add *> $null
+    }
     & psmux -L $Sock bind-key -T prefix g display-menu @menu *> $null
     # (pas d'enchaînement « select-pane \; display-menu » ici : psmux coupe la commande au « \; » et ouvrait le menu
     #  immédiatement, au lancement — menu qui avalait ensuite les touches envoyées aux panneaux)
@@ -1069,16 +1106,6 @@ function Invoke-Capture {
 
 # ───────────────────────── gestion des profils ─────────────────────────
 function Invoke-NewProfile {
-    $Presets = @($Presets)
-    $en = @($Accounts | Where-Object { $_.Enabled })
-    if ($en.Count -ge 3) {
-        # un panneau Claude par compte activé, côte à côte
-        $w = [int][Math]::Floor(76 / $en.Count)
-        $cl = @(for ($q = 0; $q -lt $en.Count; $q++) { [ordered]@{ role = 'claude'; account = $en[$q].Id; width = $w; args = '--teammate-mode tmux'; focus = ($q -eq 0) } })
-        $rows = @([ordered]@{ height = 75; panes = @([ordered]@{ role = 'monitor'; width = 24 }) + $cl },
-                  [ordered]@{ height = 25; panes = @([ordered]@{ role = 'office'; width = 50 }, [ordered]@{ role = 'shell'; width = 50 }) })
-        $Presets += [pscustomobject]@{ Name = "Un Claude par compte — $($en.Count) comptes"; Desc = "moniteur partagé + $($en.Count) Claude côte à côte, Bureau et terminal"; Rows = (ConvertTo-Json $rows -Depth 6 -Compress) }
-    }
     $i = Pick-Item '◆ NOUVEAU PROFIL — disposition' $Presets { param($x) "$($x.Name)  $Dm$($x.Desc)$R" } {
         param($x)
         $tmp = [pscustomobject]@{ rows = ($x.Rows | ConvertFrom-Json) }

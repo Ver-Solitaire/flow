@@ -1,23 +1,23 @@
 {
   "name": "Équipe — multi-comptes",
-  "description": "Prompt découpé en tâches (comptes et modèles répartis) + un Claude général, moniteur et Bureau",
+  "description": "Prêt à l'emploi avec tous tes comptes connectés : fenêtre Équipe (demande → tâches réparties), un Claude par compte, moniteur et Bureau",
   "order": 3,
   "session": "flow-equipe",
   "window": "dispatch",
   "cwd": "..",
   "rows": [
     {
-      "height": 66,
+      "height": 60,
       "panes": [
-        { "role": "team", "width": 38, "focus": true, "maxTasks": 4 },
-        { "role": "claude", "width": 37, "args": "--teammate-mode tmux" },
-        { "role": "monitor", "width": 25 }
+        { "role": "team", "width": 62, "focus": true },
+        { "role": "monitor", "width": 38 }
       ]
     },
     {
-      "height": 34,
+      "height": 40,
       "panes": [
-        { "role": "office", "width": 100 }
+        { "role": "claude", "perAccount": true, "args": "--teammate-mode tmux", "width": 62 },
+        { "role": "office", "width": 38 }
       ]
     }
   ]

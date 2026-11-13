@@ -31,6 +31,8 @@ PowerShell 7 + une petite application C# (app\FlowApp.cs → FLOW.exe). L'utilis
   `@flow_profile`, `@flow_cwd`, `@flow_accounts`, `@flow_task`.
 - Chaîne des comptes (`-Accounts`) : `id|libellé|couleur|dossier|court` séparés par `;` — ni `|` ni `;` dans un libellé.
 - `.flow\runs\<id>\state.json` : écrit par flow-team.ps1 ET flow-plan.ps1 (même schéma ; `Use-Run` complète les champs manquants). Toujours via `Write-JsonAtomic`.
+- Profils : un panneau `{ "role": "claude", "perAccount": true }` est remplacé au lancement par un panneau par compte connecté (`Expand-Rows` dans FLOW.ps1 ;
+  le profil d'origine n'est jamais modifié, et `Ctrl+B W` réenregistre la forme d'origine). Les comptes ne sont liés à aucun profil.
 - Consignes des ouvriers : `taches\<id>.prompt.md` ; compte-rendu = `resultats\<id>.md` (sa présence signale « fini »).
 
 ## Pièges déjà rencontrés (chacun a un test ou une règle)

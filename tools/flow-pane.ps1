@@ -18,7 +18,8 @@ param(
     [string]$Target,            # « session:fenêtre.panneau » du panneau actif (fourni par psmux)
     [ValidateSet('L', 'R', 'U', 'D', '')][string]$Move = '',
     [switch]$Save,
-    [switch]$Team
+    [switch]$Team,
+    [string]$AddClaude = ''     # identifiant d'un compte : ajoute un Claude de ce compte dans la fenêtre courante
 )
 $ErrorActionPreference = 'SilentlyContinue'
 . (Join-Path $PSScriptRoot 'flow-common.ps1')
@@ -67,6 +68,38 @@ if ($Team) {
     return
 }
 
+if ($AddClaude) {
+    # un Claude de plus, sur le compte choisi, à côté du panneau actif
+    $cwd = (& psmux -L $Sock display-message -t $sess -p '#{@flow_cwd}' | Select-Object -First 1)
+    $accs = (& psmux -L $Sock display-message -t $sess -p '#{@flow_accounts}' | Select-Object -First 1)
+    $ac = $null
+    foreach ($ent in ("$accs" -split ';')) {
+        $f = $ent -split '\|', 5
+        if ($f.Count -ge 4 -and $f[0].Trim() -eq $AddClaude) { $ac = [pscustomobject]@{ Id = $f[0].Trim(); Label = $f[1].Trim(); Dir = $f[3].Trim() } }
+    }
+    if (-not $ac) { Say "FLOW : compte « $AddClaude » inconnu pour cette session (relance le profil)"; return }
+    if (-not $cwd -or -not (Test-Path -LiteralPath $cwd -PathType Container)) { $cwd = (& psmux -L $Sock display-message -t $Target -p '#{pane_current_path}' | Select-Object -First 1) }
+    & psmux -L $Sock split-window -h -t $win -c $cwd *> $null
+    Start-Sleep -Milliseconds 300
+    $idx = (& psmux -L $Sock display-message -t $win -p '#{pane_index}' | Select-Object -First 1)
+    $tgt = "$win.$idx"
+    for ($k = 0; $k -lt 60; $k++) {
+        if (((& psmux -L $Sock capture-pane -p -t $tgt 2>$null) -join '').Trim()) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    $title = "✦ claude · $($ac.Label)"
+    & psmux -L $Sock set -p -t $tgt '@flow_role' $title *> $null
+    & psmux -L $Sock set -p -t $tgt '@flow_base' $title *> $null
+    & psmux -L $Sock set -p -t $tgt '@flow_acct' $ac.Id *> $null
+    & psmux -L $Sock set -p -t $tgt '@flow_spec' (ConvertTo-Json -Compress ([pscustomobject]@{ role = 'claude'; account = $ac.Id })) *> $null
+    $acctEnv = if ($ac.Dir) { "`$env:CLAUDE_CONFIG_DIR = $(Q $ac.Dir); " } else { 'Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue; ' }
+    $cmd = "Set-Location -LiteralPath $(Q $cwd); $(Auth-Strip)${acctEnv}Clear-Host; claude"
+    & psmux -L $Sock send-keys -t $tgt -l $cmd *> $null
+    & psmux -L $Sock send-keys -t $tgt Enter *> $null
+    Say "FLOW : Claude « $($ac.Label) » ajouté"
+    return
+}
+
 if ($Move) {
     $all = Panes
     $a = $all | Where-Object { $_.I -eq $cur } | Select-Object -First 1
@@ -106,7 +139,14 @@ if ($Save) {
             elseif ($spec.PSObject.Properties['focus']) { $spec.PSObject.Properties.Remove('focus') }
             $spec
         }
-        [pscustomobject]@{ height = $ps[0].H; panes = @($cells) }
+        # les panneaux ajoutés automatiquement (un par compte) se réenregistrent en UN seul panneau « perAccount »
+        $merged = [Collections.Generic.List[object]]::new()
+        foreach ($c in @($cells)) {
+            $prev = $merged | Where-Object { $_.perAccount -and $c.perAccount -and $_.role -eq $c.role } | Select-Object -First 1
+            if ($prev) { $prev.width = [int]$prev.width + [int]$c.width; continue }
+            $merged.Add($c)
+        }
+        [pscustomobject]@{ height = $ps[0].H; panes = @($merged) }
     }
     $rows = @($rows)
     $th = ($rows.height | Measure-Object -Sum).Sum

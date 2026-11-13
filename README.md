@@ -374,8 +374,7 @@ Les comptes sont déclarés dans `config\accounts.json` :
   Si ton navigateur est déjà connecté à un autre compte, ouvre le lien dans une fenêtre privée.
 - **Autant de comptes que tu veux** : touche **C** → « ＋ ajouter un compte Claude… » (aussi proposé à l'écran de
   lancement du profil Équipe). FLOW crée l'entrée dans `accounts.json` (dossier `~\.claude-compteN`) et enchaîne
-  sur la connexion. Le profil Équipe répartit les tâches sur tous les comptes connectés ; à partir de 3 comptes,
-  **N** (nouveau profil) propose la disposition « Un Claude par compte ».
+  sur la connexion. Le profil Équipe répartit les tâches sur tous les comptes connectés et ouvre un Claude par compte.
 - **Retirer un compte** : touche **C** → « － retirer un compte… » (aussi proposé à l'écran de connexion). Au choix : retirer **et déconnecter** le compte,
   ou le retirer de FLOW seulement. Le dossier du compte n'est jamais supprimé ; le compte par défaut de Claude Code ne se retire pas. Les profils qui
   utilisaient le compte retiré sont signalés : ils ne se lancent plus tant qu'ils n'ont pas été modifiés (touche E).
@@ -383,8 +382,13 @@ Les comptes sont déclarés dans `config\accounts.json` :
 - **Connexion à tout moment** : dans le sélecteur, touche **C** → choisir le compte → Entrée.
   En ligne de commande : `pwsh -File FLOW.ps1 -Login second`.
 - `"email": "moi@exemple.com"` (facultatif) sur un compte préremplit l'adresse sur la page de connexion.
-- **Choisir le compte** : `"account": "second"` sur un profil (tous ses panneaux) ou sur un panneau précis.
-  Le profil **Duo — 2 comptes** (`profiles\duo.json`) ouvre un Claude par compte côte à côte.
+- **Les comptes ne sont liés à aucun profil.** Connecte (ou ajoute) autant de comptes que tu veux, une fois, à la sélection du projet : les profils
+  **Équipe — multi-comptes** et **Un Claude par compte** ouvrent alors automatiquement **un Claude par compte connecté**, et la fenêtre Équipe répartit
+  les tâches sur eux tous. Dans un profil, un panneau `{ "role": "claude", "perAccount": true }` est remplacé au lancement par un panneau par compte
+  connecté (sans compte connecté : un seul, sur le compte par défaut). Ctrl+B W réenregistre ce panneau sous sa forme d'origine.
+- **Ajouter un Claude à tout moment** (par exemple un second Claude du même compte, ou un compte connecté après le lancement) : `Ctrl+B` puis `A`,
+  ou clic droit sur un panneau → « ＋ Ajouter un Claude : <compte> » : un nouveau panneau Claude s'ouvre à côté du panneau actif, sur ce compte.
+- **Forcer un compte** : `"account": "second"` sur un profil (tous ses panneaux) ou sur un panneau précis (écrase `perAccount`).
 
 **Moniteur partagé** : dans chaque profil, le moniteur affiche un panneau COMPTES avec, pour chaque compte
 activé, son état (travaille / en attente / non connecté), son contexte et ses limites semaine / session.

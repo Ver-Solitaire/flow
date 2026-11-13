@@ -8,6 +8,33 @@ BeforeAll {
     function New-Acct([string]$Id, [bool]$On = $true) { [pscustomobject]@{ Id = $Id; Label = $Id; Dir = $null; Enabled = $On; Logged = $true; Home = "C:\x\$Id"; Hex = 'ffffff'; Short = $Id } }
 }
 
+Describe 'Expand-Rows : un Claude par compte connecté, quel que soit le profil' {
+    BeforeAll {
+        function New-Prof { [pscustomobject]@{ rows = @([pscustomobject]@{ height = 60; panes = @([pscustomobject]@{ role = 'team'; width = 40 }, [pscustomobject]@{ role = 'claude'; perAccount = $true; args = '--x'; width = 60; focus = $true }) }) } }
+    }
+    It 'crée un panneau par compte connecté (les comptes non connectés ou désactivés sont ignorés) et se partage la largeur' {
+        $global:Accounts = @((New-Acct 'a'), (New-Acct 'b'), (New-Acct 'c'), [pscustomobject]@{ Id = 'd'; Label = 'd'; Dir = 'x'; Enabled = $true; Logged = $false }, (New-Acct 'e' $false))
+        $panes = @((Expand-Rows (New-Prof))[0].panes)
+        $panes.Count | Should -Be 4                                              # team + 3 Claude
+        $cl = @($panes | Where-Object { $_.role -eq 'claude' })
+        ($cl.account -join ',') | Should -Be 'a,b,c'
+        ($cl | ForEach-Object { $_.width } | Measure-Object -Sum).Sum | Should -Be 60
+        @($cl | Where-Object { $_.focus }).Count | Should -Be 1                  # le focus reste sur un seul panneau
+        $cl[0].PSObject.Properties['perAccount'] | Should -BeNullOrEmpty
+    }
+    It 'ne modifie pas le profil d''origine' {
+        $global:Accounts = @((New-Acct 'a'), (New-Acct 'b'))
+        $p = New-Prof
+        [void](Expand-Rows $p)
+        @($p.rows[0].panes).Count | Should -Be 2
+        $p.rows[0].panes[1].perAccount | Should -BeTrue
+    }
+    It 'sans aucun compte connecté, garde un seul Claude (compte par défaut)' {
+        $global:Accounts = @([pscustomobject]@{ Id = 'principal'; Label = 'Compte 1'; Dir = $null; Enabled = $true; Logged = $false })
+        @((Expand-Rows (New-Prof))[0].panes | Where-Object { $_.role -eq 'claude' }).Count | Should -Be 1
+    }
+}
+
 Describe 'Pane-Command : panneau Claude' {
     It 'avec plusieurs comptes, ajoute la consigne de répartition (skill taches-repartir)' {
         $global:Accounts = @((New-Acct 'a'), (New-Acct 'b'))
