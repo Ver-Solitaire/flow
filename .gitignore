@@ -16,5 +16,10 @@ config/accounts.json
 FLOW.exe
 config/projects.json
 
+# journal local de FLOW et copies temporaires d'écriture atomique
+config/flow.log
+config/flow.log.1
+*.tmp
+
 # tests : modules téléchargés au besoin
 tests/.modules/

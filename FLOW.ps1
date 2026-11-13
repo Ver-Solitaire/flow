@@ -7,6 +7,7 @@
     FLOW.ps1 -InstallShortcut   crée / met à jour le raccourci « FLOW » sur le bureau
     FLOW.ps1 -Login second      ouvre Claude avec le compte « second » (config\accounts.json) pour s'y connecter
     FLOW.ps1 -Team C:\projet    ouvre la fenêtre Équipe sur n'importe quel projet (une session par projet)
+    FLOW.ps1 -Doctor            diagnostic : qu'est-ce qui ne va pas sur cette machine ? (versions, comptes, sessions, journal)
     FLOW.ps1 -InstallSkills     installe les skills FLOW (dossier skills\) dans chaque compte Claude (fait aussi à chaque lancement)
     FLOW.ps1 -Project C:\projet tous les profils travaillent dans ce projet (sessions propres au projet ; J pour changer)
     FLOW.exe                    application : fenêtre de choix du projet, puis ce sélecteur (créée par -InstallShortcut)
@@ -21,6 +22,7 @@ param(
     [string]$Login,             # FLOW.ps1 -Login second : ouvre Claude avec ce compte pour s'y connecter
     [string]$Team,              # FLOW.ps1 -Team C:\mon\projet : session Équipe sur ce projet (sans créer de profil)
     [switch]$InstallSkills,     # FLOW.ps1 -InstallSkills : (ré)installe les skills FLOW dans chaque compte Claude
+    [switch]$Doctor,            # FLOW.ps1 -Doctor : contrôle l'installation, les comptes et les sessions, et dit quoi faire
     [string]$Project,           # FLOW.ps1 -Project C:\mon\projet : les profils s'ouvrent dans ce projet
     [switch]$Demo,              # FLOW.ps1 -Demo : démonstration avec activité simulée (moniteur, Bureau, personnages)
     [switch]$TeamDemo,          # FLOW.ps1 -TeamDemo : simulation de la fenêtre Équipe (prompt → plan → ouvriers → fusion)
@@ -99,7 +101,9 @@ $Err  = Rgb 255 110 90
 $Info = Rgb 120 200 255
 $Warn = Rgb 255 210 110
 . (Join-Path $PSScriptRoot 'tools\flow-input.ps1')   # clavier + souris (clics)
-. (Join-Path $PSScriptRoot 'tools\flow-common.ps1')  # écritures atomiques
+. (Join-Path $PSScriptRoot 'tools\flow-common.ps1')  # écritures atomiques, Q, journal
+$global:FlowLogFile = Join-Path $PSScriptRoot 'config\flow.log'
+$FlowVersion = try { (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'VERSION') -TotalCount 1 -ErrorAction Stop).Trim() } catch { '' }
 $KeyPairs = [Collections.Generic.List[string]]::new()  # aides affichées (rendues cliquables)
 function Key([string]$key, [string]$txt) { $KeyPairs.Add("$key|$txt"); "$B$Warn$key$R $Dm$txt$R" }
 function Hint-Zones($lines) {
@@ -360,8 +364,23 @@ function Connect-Account($a) {
         Start-Process -FilePath (Get-Command claude -ErrorAction Stop).Source -ArgumentList $largs -NoNewWindow -Wait
     } catch { Write-Host "   $Err$($_.Exception.Message)$R" }
     finally { if ($old) { $env:CLAUDE_CONFIG_DIR = $old } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue } }
-    $ok = Test-Path -LiteralPath (Join-Path $a.Home '.credentials.json')
-    if ($ok) { Ensure-StatusLine $a.Home; Install-Skills $a.Home }
+    $logged = Test-Path -LiteralPath (Join-Path $a.Home '.credentials.json')
+    if ($logged) {
+        Ensure-StatusLine $a.Home; Install-Skills $a.Home
+        Write-FlowLog "compte « $($a.Label) » connecté"
+        # deux « comptes » qui ouvrent la même identité ne doublent rien : on le dit tout de suite
+        $fresh = @(Get-Accounts | Where-Object { $_.Id -eq $a.Id })[0]
+        $mine = if ($fresh) { Acct-Mail $fresh } else { '' }
+        $same = if ($mine) { @(Get-Accounts | Where-Object { $_.Id -ne $a.Id -and $_.Logged -and (Acct-Mail $_) -eq $mine }) } else { @() }
+        if ($same.Count) {
+            Write-Host ''
+            Write-Host "   $Warn⚠ « $($a.Label) » est connecté avec la MÊME adresse que « $($same[0].Label) » ($mine).$R"
+            Write-Host "   $Dm Deux comptes identiques n'ajoutent aucune capacité. Pour changer : relance la connexion de « $($a.Label) » avec l'autre adresse (fenêtre privée).$R"
+            Write-Host "   $Dm Entrée pour continuer.$R"
+            Write-FlowLog "« $($a.Label) » et « $($same[0].Label) » ont la même identité" 'WARN'
+            [void][Console]::ReadLine()
+        }
+    }
     else {
         Write-Host ''
         Write-Host "   $Warn○ « $($a.Label) » n'est pas encore connecté.$R $Dm Entrée pour revenir à la liste.$R"
@@ -369,7 +388,7 @@ function Connect-Account($a) {
     }
     Enable-Mouse
     [Console]::Write("$e[?25l$e[2J")
-    $ok
+    $logged
 }
 
 function Add-Account {
@@ -484,8 +503,8 @@ function Watch-Arg($p, $monPane) {
 }
 
 function Acct-Env($a) {
-    # commande PowerShell qui sélectionne le compte dans un panneau
-    if ($a -and $a.Dir) { "`$env:CLAUDE_CONFIG_DIR = $(Q $a.Dir); " } else { "Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue; " }
+    # commande PowerShell qui sélectionne le compte dans un panneau (et écarte toute authentification héritée de l'environnement)
+    (Auth-Strip) + $(if ($a -and $a.Dir) { "`$env:CLAUDE_CONFIG_DIR = $(Q $a.Dir); " } else { "Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue; " })
 }
 
 function Start-AccountLogin($a, [switch]$Inline) {
@@ -602,7 +621,6 @@ function Install-AllSkills {
     $n
 }
 
-function Q([string]$s) { "'" + ($s -replace "'", "''") + "'" }   # chaîne PowerShell entre apostrophes
 
 function Team-Accounts {
     # comptes passés à la fenêtre Équipe : « id|libellé|couleur|dossier|nom court ; … »
@@ -1472,11 +1490,61 @@ function Invoke-Accounts($profiles) {
     $a = $items[$i]
     if ($a.Add) { $a = Add-Account; if (-not $a) { return @{ Msg = "$Dm ajout annulé$R" } } }
     if (-not $a.Logged) {
-        $ok = Connect-Account $a
-        return @{ Msg = $(if ($ok) { "$Ok✓ « $($a.Label) » est connecté$R" } else { "$Warn○ « $($a.Label) » n'est pas encore connecté (C pour réessayer)$R" }) }
+        $logged = Connect-Account $a
+        return @{ Msg = $(if ($logged) { "$Ok✓ « $($a.Label) » est connecté$R" } else { "$Warn○ « $($a.Label) » n'est pas encore connecté (C pour réessayer)$R" }) }
     }
     Start-AccountLogin $a
     @{ Msg = "$Info↗ Claude ouvert avec « $($a.Label) » dans une nouvelle fenêtre — l'état se met à jour tout seul$R" }
+}
+
+# ───────────────────────── diagnostic ─────────────────────────
+function Invoke-Doctor {
+    $cnt = @{ bad = 0 }
+    function Line([bool]$good, [string]$what, [string]$fix = '') {
+        if ($good) { Write-Host "  $Ok✓$R $what" } else { $cnt.bad++; Write-Host "  $Err✗$R $what"; if ($fix) { Write-Host "      $Dm→ $fix$R" } }
+    }
+    Write-Host ''
+    Write-Host "  $(Grad "◆ FLOW — diagnostic$(if ($FlowVersion) { " (v$FlowVersion)" })" 0.1 0.03)"
+    Write-Host "  $Dm$Root$R"; Write-Host ''
+    Write-Host "  $B Outils$R"
+    Line ($PSVersionTable.PSVersion.Major -ge 7) "PowerShell $($PSVersionTable.PSVersion)" 'winget install --id Microsoft.PowerShell'
+    $mux = Get-Command psmux -ErrorAction SilentlyContinue
+    Line ([bool]$mux) $(if ($mux) { "psmux : $((& psmux -V 2>$null | Select-Object -Last 1))" } else { 'psmux' }) 'winget install psmux'
+    $cl = Get-Command claude -ErrorAction SilentlyContinue
+    Line ([bool]$cl) $(if ($cl) { "Claude Code $((& claude --version 2>$null | Select-Object -First 1))" } else { 'Claude Code' }) 'winget install --id Anthropic.ClaudeCode'
+    $gt = Get-Command git -ErrorAction SilentlyContinue
+    Line ([bool]$gt) $(if ($gt) { "Git $((& git --version 2>$null) -replace 'git version ', '')" } else { 'Git' }) 'winget install --id Git.Git'
+    if ($gt) { $who = "$(& git config user.email 2>$null)".Trim(); Line ([bool]$who) $(if ($who) { "identité Git : $who" } else { 'identité Git non configurée' }) 'git config --global user.name "…" ; git config --global user.email "…" (sinon les commits de l''équipe sont signés « FLOW »)' }
+    Line ([bool](Get-Command wt.exe -ErrorAction SilentlyContinue)) 'Windows Terminal' 'winget install --id Microsoft.WindowsTerminal'
+    Line (Test-Path -LiteralPath (Join-Path $Root 'FLOW.exe')) 'application FLOW.exe' 'pwsh -File FLOW.ps1 -InstallShortcut'
+    Write-Host ''; Write-Host "  $B Comptes Claude$R"
+    foreach ($a in $Accounts) {
+        $m = Acct-Mail $a
+        Line $a.Logged "$($a.Label) [$($a.Id)] : $(if ($a.Logged) { "connecté$(if ($m) { " ($m)" })" } else { 'pas connecté' })" "pwsh -File FLOW.ps1 -Login $($a.Id)  (ou touche C dans le sélecteur)"
+        if ($a.Logged -and -not (Test-Path -LiteralPath (Join-Path $a.Home 'skills\projet-creer'))) { Line $false "$($a.Label) : skills FLOW non installés" 'pwsh -File FLOW.ps1 -InstallSkills' }
+    }
+    $dupe = @($Accounts | Where-Object { $_.Logged } | ForEach-Object { Acct-Mail $_ } | Where-Object { $_ } | Group-Object | Where-Object Count -gt 1)
+    if ($dupe.Count) { Line $false "deux comptes ont la même adresse ($($dupe[0].Name))" 'reconnecte l''un des deux avec une autre adresse' }
+    $env_ = @('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN') | Where-Object { Test-Path "Env:$_" }
+    if ($env_) { Write-Host "  $Warn!$R variable(s) d'authentification présente(s) dans l'environnement : $($env_ -join ', ') $Dm(FLOW les retire dans ses panneaux)$R" }
+    Write-Host ''; Write-Host "  $B Fichiers de configuration$R"
+    foreach ($f in @($AcctFile, $StateFile, $ProjFile, $SrcFile)) {
+        if (-not (Test-Path -LiteralPath $f)) { Write-Host "  $Dm– $(Split-Path $f -Leaf) : absent (normal s'il n'a pas encore servi)$R"; continue }
+        $okj = try { [void](Get-Content -LiteralPath $f -Raw -Encoding utf8 | ConvertFrom-Json -ErrorAction Stop); $true } catch { $false }
+        Line $okj "$(Split-Path $f -Leaf) lisible" "fichier abîmé : une copie « $(Split-Path $f -Leaf).bak » existe peut-être à côté"
+    }
+    $np = @(Get-Profiles).Count; Line ($np -gt 0) "$np profil(s) lisible(s)" 'dossier profiles\ vide ou illisible'
+    Write-Host ''; Write-Host "  $B Sessions$R"
+    if ($mux) {
+        $ss = @(& psmux -L $Sock ls 2>$null | Where-Object { $_ })
+        if ($ss.Count) { Write-Host "  $Ok✓$R $($ss.Count) session(s) FLOW ouverte(s) :"; $ss | ForEach-Object { Write-Host "      $_" } } else { Write-Host "  $Dm– aucune session FLOW ouverte$R" }
+    }
+    if ($ProjectDir) { Write-Host "  $Dm projet courant : $ProjectDir$R" }
+    Write-Host ''; Write-Host "  $B Journal$R $Dm($($global:FlowLogFile))$R"
+    if (Test-Path -LiteralPath $global:FlowLogFile) { Get-Content -LiteralPath $global:FlowLogFile -Tail 12 -Encoding utf8 | ForEach-Object { Write-Host "  $Dm$_$R" } } else { Write-Host "  $Dm(vide)$R" }
+    Write-Host ''
+    if ($cnt.bad) { Write-Host "  $Err$($cnt.bad) point(s) à corriger.$R" } else { Write-Host "  $Ok✓ Tout est en ordre.$R" }
+    Write-Host ''
 }
 
 # ───────────────────────── raccourci bureau ─────────────────────────
@@ -1639,7 +1707,7 @@ function Draw-Selector($U, $deps) {
         for ($li = 0; $li -lt $Logo.Count; $li++) { $L.Add('   ' + (Grad $Logo[$li] ($ph + $li * 0.035) 0.012)) }
         $wave = -join (0..33 | ForEach-Object { '▁▂▃▄▅▆▇█'[[int][Math]::Round((([Math]::Sin($_ * 0.35 + $tick * 0.25) + 1) / 2) * 7)] })
         $L.Add('   ' + (Grad $wave ($ph + 0.3) 0.015))
-        $L.Add("   $Dm sélecteur de profils · Claude × psmux$R")
+        $L.Add("   $Dm sélecteur de profils · Claude × psmux$(if ($FlowVersion) { " · v$FlowVersion" })$R")
         $L.Add("   $dl")
     }
 
@@ -1960,6 +2028,7 @@ function Show-Selector([string]$msg, [string]$selectId) {
 if ($InstallShortcut) { "Raccourci : $(Install-Shortcut)"; return }
 
 $Accounts = Get-Accounts
+if ($Doctor) { Invoke-Doctor; return }
 if ($InstallSkills) { "Skills FLOW installés dans $(Install-AllSkills) compte(s) : $((Get-ChildItem -LiteralPath (Join-Path $Root 'skills') -Directory).Name -join ', ')"; return }
 if ($Login) {
     $a = $Accounts | Where-Object { $_.Id -eq $Login -or $_.Label -eq $Login } | Select-Object -First 1

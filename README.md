@@ -17,6 +17,15 @@ partage une demande, et un « Bureau » où chaque agent est un petit personnage
 
 Prérequis : Windows 10/11 avec `winget` (« App Installer » du Microsoft Store).
 
+## Dépannage
+
+- **`pwsh -File FLOW.ps1 -Doctor`** : contrôle PowerShell 7, psmux, Claude Code, Git, les comptes (connectés ou non, adresse), les fichiers de configuration,
+  les sessions ouvertes et les dernières lignes du journal, et dit quoi faire pour chaque point en défaut.
+- **Journal** : `config\flow.log` (200 Ko au plus) : transitions des équipes, messages envoyés aux ouvriers, sauvegardes et refus.
+- **Tests** : `pwsh -File tests\run.ps1` (Pester 5 ; téléchargé dans `tests\.modules` s'il manque). Aucun test ne touche à tes sessions ni à tes comptes.
+- Un Claude d'ouvrier qui ne fait rien : ouvre son panneau (fenêtre « equipe », `Ctrl+B 2`) ; s'il attend une autorisation ou une réponse, réponds-lui là.
+- Version installée : affichée dans l'en-tête du sélecteur (fichier `VERSION`) ; historique dans `CHANGELOG.md`.
+
 ## Lancer
 
 - **Application FLOW** (raccourci bureau et menu Démarrer « FLOW », épinglable à la barre des tâches) :
@@ -262,7 +271,10 @@ Profil **Équipe — multi-comptes** (`profiles\equipe.json`) : à gauche la fen
    En cas de conflit : **C** lance un Claude intégrateur qui le résout. Les tests du projet sont lancés
    s'ils sont détectés (npm, pytest, cargo, go, dotnet) ou indiqués par `"testCommand"` sur le panneau.
 5. **Validation** : résumé des changements, tests, comptes-rendus des ouvriers. **D** voir le diff,
-   **F** fusionner dans ta branche, **J** jeter. Après fusion, copies et branches temporaires sont supprimées.
+   **F** fusionner dans ta branche, **J** jeter (écran de confirmation, touche **O**). Rien n'est perdu : avant de supprimer les copies et
+   les branches temporaires, FLOW sauvegarde les fichiers non commités et met de côté, sous `refs/flow-archive/<équipe>/<tâche>`, toute tâche qui n'est
+   pas dans le travail livré (ou toute l'équipe si tu la jettes). Pour en retrouver une : `git branch recup refs/flow-archive/<équipe>/<tâche>`.
+   Si une tâche reste à l'écart (conflit abandonné, commit impossible), FLOW te le dit avant de livrer ; la livraison est refusée quand rien n'a été fusionné.
 
 **Modèles** : le planificateur (Opus) choisit pour chaque tâche le modèle adapté — *haiku* pour le simple et
 mécanique, *sonnet* pour le standard, *opus* pour le complexe — avec sa justification ; **M** dans le plan
@@ -334,6 +346,14 @@ appeler par leur nom (`/projet-creer`…).
 - Dans la fenêtre Équipe, **F6** (écran de demande) affiche les plans en attente déposés par `taches-repartir`.
 
 ## Plusieurs comptes Claude
+
+> **À lire avant de cumuler des comptes.** FLOW est un projet indépendant, **non affilié à Anthropic**. Il ne fait que lancer plusieurs
+> fois Claude Code, chacun avec son propre dossier de connexion. Il ne contourne aucune limite d'usage et ne partage aucun identifiant
+> entre comptes. Les conditions d'utilisation d'Anthropic s'appliquent à chaque compte : **vérifie qu'elles autorisent l'usage que tu veux en
+> faire** (par exemple, plusieurs comptes à ton nom pour additionner des quotas). Un seul compte suffit pour utiliser FLOW, et la
+> répartition en équipe marche aussi avec un seul compte. Deux « comptes » connectés avec la même adresse ne comptent que pour un : FLOW te le signale.
+> Dans les panneaux de FLOW, les variables `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` et `CLAUDE_CODE_OAUTH_TOKEN` sont retirées, pour qu'un compte
+> utilise bien sa propre connexion et pas une clé d'API héritée.
 
 Les comptes sont déclarés dans `config\accounts.json` :
 

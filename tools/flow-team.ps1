@@ -101,7 +101,6 @@ function Cls { [Console]::Write("$e[?25l$e[2J") }
 $Spin = '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'
 $Tick = 0
 
-function Q([string]$s) { "'" + ($s -replace "'", "''") + "'" }
 
 function Notify([string]$title, [string]$text) {
     $ico = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\assets\flow.ico'))
@@ -125,7 +124,8 @@ function Find-Git {
 }
 $GitExe = Find-Git
 . (Join-Path $PSScriptRoot 'flow-input.ps1')   # clavier + souris (clics)
-. (Join-Path $PSScriptRoot 'flow-common.ps1')  # écritures atomiques
+. (Join-Path $PSScriptRoot 'flow-common.ps1')  # écritures atomiques, Q, journal
+$global:FlowLogFile = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\config\flow.log'))
 $GitId = @()
 $GitCode = 0
 function Git-In([string]$dir, [string[]]$a) {
@@ -178,7 +178,7 @@ function Acct-Load($a) {
     $v
 }
 function Acct-Env($a) {
-    if ($a -and $a.Dir) { "`$env:CLAUDE_CONFIG_DIR = $(Q $a.Dir); " } else { "Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue; " }
+    (Auth-Strip) + $(if ($a -and $a.Dir) { "`$env:CLAUDE_CONFIG_DIR = $(Q $a.Dir); " } else { "Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue; " })
 }
 function Usable-Accounts {
     $u = @($Accs | Where-Object { Acct-Logged $_ })
@@ -892,15 +892,15 @@ function Connect-Acct($a) {
         Start-Process -FilePath (Get-Command claude -ErrorAction Stop).Source -ArgumentList @('auth', 'login') -NoNewWindow -Wait
     } catch { Write-Host "  $Err$($_.Exception.Message)$R" }
     finally { if ($old) { $env:CLAUDE_CONFIG_DIR = $old } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue } }
-    $ok = Acct-Logged $a
-    if (-not $ok) {
+    $logged = Acct-Logged $a
+    if (-not $logged) {
         Write-Host ''
         Write-Host "  $Warn○ « $($a.Label) » n'est pas encore connecté.$R $Dm Entrée pour continuer.$R"
         [void][Console]::ReadLine()
     }
     Enable-Mouse
     $script:LastFrameSize = ''; Cls
-    $ok
+    $logged
 }
 
 function Connect-Missing {
@@ -1394,7 +1394,8 @@ function Start-Task($t) {
 function Send-ToPane([string]$tag, [string]$text) {
     # écrit un message dans le panneau d'un Claude (comme si l'utilisateur le tapait) ; Claude le traite à son tour
     $tgt = Find-Pane $tag
-    if (-not $tgt) { return $false }
+    if (-not $tgt) { Write-FlowLog "message non envoyé : aucun panneau pour « $tag »" 'WARN'; return $false }
+    Write-FlowLog "message envoyé à $tag : $(($text -replace '\s+', ' ').Substring(0, [Math]::Min(120, ($text -replace '\s+', ' ').Length)))"
     & psmux -L $Sock send-keys -t $tgt -l ($text -replace "`r?`n", ' ') *> $null
     & psmux -L $Sock send-keys -t $tgt Enter *> $null
     $true
@@ -1560,6 +1561,7 @@ function Tell-Others([string]$fromId, [string]$text) {
 
 function Finish-Task($t) {
     $t.status = 'done'; $t.doneAt = (Get-Date).ToString('o'); $t.live = 'done'
+    Write-FlowLog "tâche $($t.id) terminée ($($t.title))".
     $rel = if ([int]$t.reviews) { ' et relue' } else { '' }
     if ($Psmux) { Set-PaneState $t.id 'done' "✓ terminé$(if ($rel) { ' · relu' })" }
     Notify "✓ Tâche $($t.id) terminée$rel" $t.title
@@ -1774,9 +1776,9 @@ function Mode-Run {
                 return 'integrate'
             }
             elseif ($ch -eq 'x') {
-                $ok = Confirm-Discard '⚑ ÉQUIPE — abandonner l''équipe ?'
+                $go = Confirm-Discard '⚑ ÉQUIPE — abandonner l''équipe ?'
                 Cls
-                if ($ok) { $arch = @(Cleanup-Run -Abandon); $State.status = 'discarded'; Save-State; Show-Archive $arch; return 'home' }
+                if ($go) { $arch = @(Cleanup-Run -Abandon); $State.status = 'discarded'; Save-State; Show-Archive $arch; return 'home' }
             }
         }
     }
@@ -1897,6 +1899,7 @@ function Mode-Integrate {
                 if ($c1 -ne 0 -or $c2 -ne 0) {
                     # ne pas fusionner sans ses changements : la tâche est laissée de côté et sa copie reste intacte
                     $skipped += $t.id; $State.integration.skipped = $skipped; Save-State
+                    Write-FlowLog "commit automatique de $($t.id) impossible : tâche laissée de côté" 'ERREUR'
                     $why = (@($(if ($c1 -ne 0) { $oa } else { $oc })) | Where-Object { "$_".Trim() } | Select-Object -Last 1)
                     $log.Add("$Err✗ $($t.id) : le commit automatique de ses changements a échoué ($why) : tâche laissée de côté, sa copie est conservée : $($t.worktree)$R")
                     continue
@@ -1907,6 +1910,7 @@ function Mode-Integrate {
         $log.Add("$Info→ fusion de $($t.id) — $($t.title)$R"); Show-Log
         $om = Git-In $iw @('merge', '--no-ff', '--no-edit', '-m', "flow: tâche $($t.id) — $($t.title)", (Task-Branch $t))
         if ($GitCode -ne 0) {
+            Write-FlowLog "fusion de $($t.id) refusée ou en conflit : $((@($om) | Where-Object { "$_".Trim() } | Select-Object -Last 1))" 'WARN'
             $State.integration | Add-Member -NotePropertyName conflictMsg -NotePropertyValue ((@($om) | Where-Object { "$_".Trim() } | Select-Object -Last 2) -join ' / ') -Force
             $State.integration.conflict = $t.id; $State.integration.merged = $merged; $State.integration.skipped = $skipped; Save-State
             Notify "⚠ Conflit de fusion (tâche $($t.id))" 'Ouvre la fenêtre Équipe pour le résoudre.'
@@ -1948,21 +1952,21 @@ function Cleanup-Run([switch]$KeepIntegration, [switch]$Abandon) {
     # Supprime les copies de travail et les branches de l'équipe SANS RIEN PERDRE : le travail non commité est sauvegardé,
     # et la branche de toute tâche qui n'est pas dans l'intégration (ou de toute l'équipe si on abandonne) est conservée
     # sous refs/flow-archive/<équipe>/<tâche>. Renvoie des lignes d'information pour l'utilisateur.
-    $info = [Collections.Generic.List[string]]::new()
+    $notes = [Collections.Generic.List[string]]::new()
     Kill-TeamPanes
     $ib = Int-Branch
     [void](Git-In $RepoRoot @('rev-parse', '--verify', '-q', "refs/heads/$ib")); $ibOk = $GitCode -eq 0
     foreach ($t in @($State.tasks)) {
         $br = Task-Branch $t
         [void](Git-In $RepoRoot @('rev-parse', '--verify', '-q', "refs/heads/$br")); $brOk = $GitCode -eq 0
-        if (-not (Backup-Task $t)) { $info.Add("la copie de $($t.id) est conservée (sa sauvegarde a échoué) : $($t.worktree)"); continue }
+        if (-not (Backup-Task $t)) { $notes.Add("la copie de $($t.id) est conservée (sa sauvegarde a échoué) : $($t.worktree)"); continue }
         if ($brOk) {
             $inInt = $false
             if ($ibOk -and -not $Abandon) { [void](Git-In $RepoRoot @('merge-base', '--is-ancestor', $br, $ib)); $inInt = $GitCode -eq 0 }
             if (-not $inInt) {
                 [void](Git-In $RepoRoot @('update-ref', (Archive-Ref $t), $br))
-                if ($GitCode -ne 0) { $info.Add("la branche de $($t.id) est conservée ($br) : l'archivage a échoué"); continue }
-                $info.Add("tâche $($t.id) ($($t.title)) mise de côté : $(Archive-Ref $t)")
+                if ($GitCode -ne 0) { $notes.Add("la branche de $($t.id) est conservée ($br) : l'archivage a échoué"); continue }
+                $notes.Add("tâche $($t.id) ($($t.title)) mise de côté : $(Archive-Ref $t)")
             }
         }
         if ($t.worktree -and (Test-Path -LiteralPath $t.worktree)) { [void](Git-In $RepoRoot @('worktree', 'remove', '--force', $t.worktree)) }
@@ -1972,7 +1976,7 @@ function Cleanup-Run([switch]$KeepIntegration, [switch]$Abandon) {
     if (-not $KeepIntegration -and $ibOk) {
         if ($Abandon) {
             [void](Git-In $RepoRoot @('update-ref', "refs/flow-archive/$($State.id)/_integration", $ib))
-            if ($GitCode -eq 0) { $info.Add("assemblage mis de côté : refs/flow-archive/$($State.id)/_integration") }
+            if ($GitCode -eq 0) { $notes.Add("assemblage mis de côté : refs/flow-archive/$($State.id)/_integration") }
         }
         [void](Git-In $RepoRoot @('branch', '-D', $ib))
     }
@@ -1984,7 +1988,8 @@ function Cleanup-Run([switch]$KeepIntegration, [switch]$Abandon) {
         $p = "$l" -split ' '
         if ($p.Count -eq 2 -and $p[1] -match '^\d+$' -and [long]$p[1] -lt $old) { [void](Git-In $RepoRoot @('update-ref', '-d', $p[0])) }
     }
-    $info
+    foreach ($n in $notes) { Write-FlowLog "nettoyage de l'équipe $($State.id) : $n" 'WARN' }
+    $notes
 }
 
 function Archive-Lines($lines) {
@@ -2146,9 +2151,9 @@ function Mode-Review {
             $msg = $res.Info
         }
         elseif ($ch -eq 'j') {
-            $ok = Confirm-Discard '⚑ ÉQUIPE — jeter le travail de l''équipe ?'
+            $go = Confirm-Discard '⚑ ÉQUIPE — jeter le travail de l''équipe ?'
             Cls
-            if ($ok) { $arch = @(Cleanup-Run -Abandon); $State.status = 'discarded'; Save-State; Show-Archive $arch; return 'home' }
+            if ($go) { $arch = @(Cleanup-Run -Abandon); $State.status = 'discarded'; Save-State; Show-Archive $arch; return 'home' }
         }
     }
 }

@@ -15,6 +15,8 @@ BeforeAll {
     # identité de commit pour les fusions faites par FLOW (le chargement ne la pose que si Git n'en connaît aucune)
     $env:GIT_AUTHOR_NAME = 't'; $env:GIT_AUTHOR_EMAIL = 't@t'; $env:GIT_COMMITTER_NAME = 't'; $env:GIT_COMMITTER_EMAIL = 't@t'
 
+    $global:FlowLogFile = Join-Path $global:Base 'flow.log'   # le journal des tests ne se mélange pas à celui de l'utilisateur
+
     # remplace tout ce qui toucherait l'écran, le clavier ou les notifications
     Remove-Item Alias:cls -Force -ErrorAction SilentlyContinue   # l'alias « cls » (Clear-Host) passerait avant la fonction ci-dessous
     function Notify { }
@@ -176,5 +178,29 @@ Describe 'Pane-Cmd : ligne de commande des ouvriers' {
         $c = Pane-Cmd (Join-Path $global:WtRoot 'A') $null (Join-Path $global:RunDir 'taches\A.prompt.md') -Model 'sonnet'
         $c | Should -Match "claude 'Lis le fichier .+' --model sonnet .*--add-dir '"
         $c.IndexOf("'Lis le fichier") | Should -BeLessThan $c.IndexOf('--add-dir')
+    }
+}
+
+Describe 'Q : protection des textes passés à PowerShell' {
+    It 'rend exactement le texte, y compris avec des apostrophes droites ou typographiques et des caractères spéciaux' {
+        foreach ($t in @("l'été", "l’été", "a‘b", 'x"y', 'c;d|e', 'a$(Get-Date)b', 'C:\Users\Paul\dossier d''essai', "titre’; Write-Output PIRATE; ’")) {
+            $r = & pwsh -NoProfile -Command ('Write-Output ' + (Q $t))
+            $r | Should -Be $t
+        }
+    }
+}
+
+Describe 'Auth-Strip et journal' {
+    It 'retire les variables d''authentification héritées dans la commande d''un panneau' {
+        $c = Acct-Env $null
+        $c | Should -Match 'Remove-Item Env:ANTHROPIC_API_KEY'
+        $c | Should -Match 'CLAUDE_CODE_OAUTH_TOKEN'
+    }
+    It 'Write-FlowLog écrit une ligne datée et ne lève jamais d''erreur' {
+        Write-FlowLog 'essai du journal'
+        (Get-Content $global:FlowLogFile -Raw) | Should -Match '\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \[\d+\] INFO\s+essai du journal'
+        $old = $global:FlowLogFile; $global:FlowLogFile = 'Z:\dossier\inexistant\flow.log'
+        { Write-FlowLog 'x' } | Should -Not -Throw
+        $global:FlowLogFile = $old
     }
 }
