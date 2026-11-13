@@ -1517,7 +1517,12 @@ function Check-Reviews {
     $note = ''
     foreach ($id in @($RevJobs.Keys)) {
         $a = $RevJobs[$id]
-        if ($a.Job.State -eq 'Running') { continue }
+        if ($a.Job.State -eq 'Running') {
+            if (((Get-Date) - $a.Start).TotalMinutes -lt 10) { continue }
+            # délai dépassé : la relecture est abandonnée, l'équipe n'attend pas indéfiniment
+            Stop-Job $a.Job -ErrorAction SilentlyContinue
+            Write-FlowLog "relecture de $id : délai de 10 minutes dépassé" 'ERREUR'
+        }
         $rv = Receive-Job $a.Job; Remove-Job $a.Job -Force; $RevJobs.Remove($id)
         $t = Task-ById $id
         $rvw = $null
@@ -1526,14 +1531,19 @@ function Check-Reviews {
             $txt = [string]$j.result; $x = $txt.IndexOf('{'); $z = $txt.LastIndexOf('}')
             if (-not $j.is_error -and $x -ge 0 -and $z -gt $x) { $rvw = $txt.Substring($x, $z - $x + 1) | ConvertFrom-Json -ErrorAction Stop }
         } catch { $rvw = $null }
-        $t.reviews = [int]$t.reviews + 1
         $head = "`n---`n## Relecture n°$($a.Round) du $(Get-Date -Format 'HH:mm') — par $($a.Acct.Label) ($($a.Model))`n`n"
         if (-not $rvw) {
-            # relecteur muet ou réponse illisible : on ne bloque pas l'équipe pour autant
-            Add-Content -LiteralPath (Review-File $id) ($head + "(la relecture n'a pas pu être faite)`n") -Encoding utf8
-            $t.review = 'ok'; $note = "$Warn⌕ relecture de $id impossible : tâche acceptée telle quelle$R"
+            # relecteur muet, hors délai ou réponse illisible : l'équipe n'est pas bloquée, mais la tâche n'est PAS « relue »
+            $raw = Join-Path $RunDir "relectures\$id-$($a.Round).sortie.txt"
+            try { Set-Content -LiteralPath $raw "$($rv.Out)" -Encoding utf8 } catch {}
+            Add-Content -LiteralPath (Review-File $id) ($head + "(la relecture n'a pas pu être faite : sortie brute dans $raw)`n") -Encoding utf8
+            $t.review = 'impossible'
+            Write-FlowLog "relecture de $id impossible (sortie brute : $raw)" 'ERREUR'
+            Notify "⚠ Relecture de la tâche $id impossible" 'La tâche est acceptée sans relecture.'
+            $note = "$Err⌕ relecture de $id IMPOSSIBLE : tâche acceptée SANS relecture (détail : relectures\$id-$($a.Round).sortie.txt)$R"
             continue
         }
+        $t.reviews = [int]$t.reviews + 1
         $issues = @($rvw.issues | Where-Object { $_ })
         $serious = @($issues | Where-Object { "$($_.severity)" -match 'bloquant|important' })
         $md = $head + "**Avis :** $($rvw.summary)`n"
@@ -1561,8 +1571,8 @@ function Tell-Others([string]$fromId, [string]$text) {
 
 function Finish-Task($t) {
     $t.status = 'done'; $t.doneAt = (Get-Date).ToString('o'); $t.live = 'done'
-    Write-FlowLog "tâche $($t.id) terminée ($($t.title))".
-    $rel = if ([int]$t.reviews) { ' et relue' } else { '' }
+    Write-FlowLog "tâche $($t.id) terminée ($($t.title))"
+    $rel = if ([int]$t.reviews -and $t.review -ne 'impossible') { ' et relue' } else { '' }
     if ($Psmux) { Set-PaneState $t.id 'done' "✓ terminé$(if ($rel) { ' · relu' })" }
     Notify "✓ Tâche $($t.id) terminée$rel" $t.title
     Tell-Others $t.id "[FLOW] Info équipe : la tâche $($t.id) ($($t.title)) est terminée$rel. Compte-rendu : $(Result-File $t.id). Son code est sur la branche $(Task-Branch $t) (lecture : git show $(Task-Branch $t):<chemin>). Si ta tâche s'y raccorde, vérifie que tu utilises bien ses noms et ses formats ; sinon continue sans t'interrompre."
@@ -1623,7 +1633,7 @@ function Mode-Run {
                         # compte-rendu écrit : relecture croisée par un autre compte, puis seulement « terminée »
                         $stamp = [string](Get-Item -LiteralPath (Result-File $t.id)).LastWriteTimeUtc.Ticks
                         if ($RevJobs.ContainsKey($t.id)) { $t.live = 'review' }
-                        elseif (-not $State.crossReview -or $t.review -eq 'ok' -or -not $t.worktree) { Finish-Task $t }
+                        elseif (-not $State.crossReview -or $t.review -in 'ok', 'impossible' -or -not $t.worktree) { Finish-Task $t }
                         elseif ($stamp -ne [string]$t.reviewSeen) {
                             if ([int]$t.reviews -ge $MaxReviews) { Finish-Task $t }   # il a répondu à la dernière relecture
                             else {
@@ -2141,6 +2151,16 @@ function Mode-Review {
                     "$Ok Leur travail est mis de côté dans Git (refs/flow-archive/$($State.id)/…) : tu pourras le récupérer.$R") @('O', 'livrer quand même', 'Échap', 'annuler')
                 Cls
                 if ("$($k2.KeyChar)".ToLower() -ne 'o') { continue }
+            }
+            # 4) une vérification du projet a échoué : on ne livre pas sans le dire
+            $failed = @(@($State.integration.checks) | Where-Object { $_.ran -and -not $_.ok })
+            if ($failed.Count) {
+                $k3 = Message-Screen '⚑ ÉQUIPE — une vérification a échoué' @(
+                    "$Err✗ En échec sur la branche d'intégration : $(($failed.name) -join ', ').$R",
+                    "$Dm Détail : $(Join-Path $RunDir 'verifications.txt')$R", '',
+                    'Livrer maintenant mettrait ce code dans ton projet.') @('O', 'livrer quand même', 'Échap', 'annuler')
+                Cls
+                if ("$($k3.KeyChar)".ToLower() -ne 'o') { continue }
             }
             $res = Deliver-Run $dlv $target $cur
             if ($res.Ok) {

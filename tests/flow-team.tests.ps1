@@ -11,7 +11,7 @@ BeforeAll {
     . (Join-Path $global:FlowRoot 'tools\flow-team.ps1') -LoadOnly -Repo $global:Base
 
     # les fonctions de flow-team.ps1 lisent ces variables sans préfixe : sans copie locale, elles voient les valeurs globales posées par les tests
-    foreach ($n in 'RepoRoot', 'RunDir', 'WtRoot', 'State', 'Cfg', 'Psmux', 'GitCode') { Remove-Variable -Name $n -Scope Local -ErrorAction SilentlyContinue }
+    foreach ($n in 'RepoRoot', 'RunDir', 'WtRoot', 'State', 'Cfg', 'Psmux', 'GitCode', 'RevJobs') { Remove-Variable -Name $n -Scope Local -ErrorAction SilentlyContinue }
     # identité de commit pour les fusions faites par FLOW (le chargement ne la pose que si Git n'en connaît aucune)
     $env:GIT_AUTHOR_NAME = 't'; $env:GIT_AUTHOR_EMAIL = 't@t'; $env:GIT_COMMITTER_NAME = 't'; $env:GIT_COMMITTER_EMAIL = 't@t'
 
@@ -48,7 +48,7 @@ BeforeAll {
         $tasks = foreach ($id in $Ids) {
             $wt = Join-Path $global:WtRoot $id
             [void](Git-Run $repo @('worktree', 'add', '-q', '-b', "flow/T1-$id", $wt, $sha))
-            [pscustomobject]@{ id = $id; title = "Tâche $id"; status = 'done'; worktree = $wt; depends = @(); files = @("$id.txt"); account = ''; model = 'sonnet' }
+            [pscustomobject]@{ id = $id; title = "Tâche $id"; status = 'done'; worktree = $wt; depends = @(); files = @("$id.txt"); account = ''; model = 'sonnet'; review = ''; reviews = 0 }
         }
         $global:State = [pscustomobject]@{
             id = 'T1'; prefix = 'flow/'; base = $sha; baseBranch = 'main'; summary = 'essai'; crossReview = $false; updated = ''; status = 'integrating'
@@ -145,6 +145,22 @@ Describe 'Mode-Integrate : pas de fausse réussite' {
         @($global:State.integration.skipped) | Should -Contain 'A'
         Test-Path (Join-Path $global:WtRoot 'A\non-commite.txt') | Should -BeTrue
         Remove-Item (Join-Path $gitdir 'index.lock') -Force
+    }
+}
+
+Describe 'Check-Reviews : relecture impossible' {
+    It 'une relecture illisible n''est pas comptée comme « relue » et sa sortie brute est conservée' {
+        [void](New-Fixture 'A')
+        New-Item -ItemType Directory -Force (Join-Path $global:RunDir 'relectures') | Out-Null
+        $job = Start-Job { [pscustomobject]@{ Code = 0; Out = 'ceci n''est pas du JSON' } }
+        [void](Wait-Job $job)
+        $global:RevJobs = @{ A = [pscustomobject]@{ Job = $job; Model = 'sonnet'; Acct = [pscustomobject]@{ Id = 'x'; Label = 'Compte 2'; Short = 'C2' }; Round = 1; Start = Get-Date } }
+        $note = Check-Reviews
+        $t = Task-ById 'A'
+        $t.review | Should -Be 'impossible'
+        [int]$t.reviews | Should -Be 0
+        Test-Path (Join-Path $global:RunDir 'relectures\A-1.sortie.txt') | Should -BeTrue
+        "$note" | Should -Match 'IMPOSSIBLE'
     }
 }
 

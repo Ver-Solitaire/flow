@@ -1821,6 +1821,11 @@ function Show-Selector([string]$msg, [string]$selectId) {
             $U.Msg = "$Err✗ Claude Code est introuvable (commande « claude ») : installe-le avant de lancer ce profil$R"
             return $null
         }
+        # la fenêtre Équipe travaille sur UN projet : sans projet choisi, elle s'ouvrirait sur le dossier qui les contient tous
+        if ((Uses-Role $p 'team') -and -not $ProjectDir) {
+            [void](Invoke-ProjectPick); & $redraw
+            if (-not $ProjectDir) { $U.Msg = "$Warn le profil « $($p.name) » a besoin d'un projet : choisis-en un avec J$R"; return $null }
+        }
         # profil partagé : dossier de travail de cette machine (demandé la 1re fois) + comptes adaptés
         $prep = Prepare-Launch $p
         if ($prep.Asked) { & $redraw }
