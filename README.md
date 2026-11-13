@@ -19,14 +19,22 @@ Prérequis : Windows 10/11 avec `winget` (« App Installer » du Microsoft Store
 
 ## Lancer
 
-- **Raccourci bureau « FLOW »**, ou double-clic sur `FLOW.cmd`
+- **Application FLOW** (raccourci bureau et menu Démarrer « FLOW », épinglable à la barre des tâches) :
+  une fenêtre liste tes projets (dossiers voisins de FLOW + projets récents, `●` = une session tourne déjà) ;
+  Entrée ou double-clic ouvre FLOW **dans ce projet**. Boutons : *Parcourir…*, *Nouveau projet…* (dossier + `git init`),
+  *Sans projet*. `FLOW.exe C:\chemin\projet` ouvre directement un projet (pratique pour un raccourci par projet).
+  L'application est compilée depuis `app\FlowApp.cs` par `-InstallShortcut` (aucun outil à installer).
+- Dans le sélecteur, **J** change de projet. Avec un projet, tous les profils s'ouvrent dans son dossier et leurs
+  sessions sont propres au projet (`flow-standard--mon-projet`) : plusieurs projets peuvent tourner en même temps.
+- Double-clic sur `FLOW.cmd` : sélecteur sans projet
 - En ligne de commande :
 
 ```powershell
 pwsh -File FLOW.ps1                       # sélecteur
 pwsh -File FLOW.ps1 -Open standard        # lance directement un profil
 pwsh -File FLOW.ps1 -Open standard -NoAttach   # construit la session en arrière-plan
-pwsh -File FLOW.ps1 -InstallShortcut      # (re)crée le raccourci bureau
+pwsh -File FLOW.ps1 -Project C:\mon\projet   # sélecteur, profils ouverts dans ce projet
+pwsh -File FLOW.ps1 -InstallShortcut      # compile FLOW.exe et (re)crée les raccourcis bureau + menu Démarrer
 ```
 
 ### Touches du sélecteur

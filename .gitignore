@@ -11,3 +11,7 @@ config/shared-local.json
 
 # comptes Claude : chacun a les siens ; install.cmd crée accounts.json depuis accounts.example.json
 config/accounts.json
+
+# application compilée par -InstallShortcut, projets récents (propres à chaque machine)
+FLOW.exe
+config/projects.json

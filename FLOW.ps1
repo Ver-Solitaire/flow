@@ -7,6 +7,8 @@
     FLOW.ps1 -InstallShortcut   crée / met à jour le raccourci « FLOW » sur le bureau
     FLOW.ps1 -Login second      ouvre Claude avec le compte « second » (config\accounts.json) pour s'y connecter
     FLOW.ps1 -Team C:\projet    ouvre la fenêtre Équipe sur n'importe quel projet (une session par projet)
+    FLOW.ps1 -Project C:\projet tous les profils travaillent dans ce projet (sessions propres au projet ; J pour changer)
+    FLOW.exe                    application : fenêtre de choix du projet, puis ce sélecteur (créée par -InstallShortcut)
 
   Tout vit dans ce dossier : profils (profiles\*.json), config psmux (config\),
   outils (tools\). Déplace le dossier puis relance -InstallShortcut.
@@ -17,6 +19,7 @@ param(
     [switch]$InstallShortcut,
     [string]$Login,             # FLOW.ps1 -Login second : ouvre Claude avec ce compte pour s'y connecter
     [string]$Team,              # FLOW.ps1 -Team C:\mon\projet : session Équipe sur ce projet (sans créer de profil)
+    [string]$Project,           # FLOW.ps1 -Project C:\mon\projet : les profils s'ouvrent dans ce projet
     [switch]$Demo,              # FLOW.ps1 -Demo : démonstration avec activité simulée (moniteur, Bureau, personnages)
     [switch]$TeamDemo,          # FLOW.ps1 -TeamDemo : simulation de la fenêtre Équipe (prompt → plan → ouvriers → fusion)
     [switch]$ShareDemo          # FLOW.ps1 -ShareDemo : démonstration des bibliothèques de profils partagés
@@ -36,6 +39,10 @@ $Tools     = Join-Path $Root 'tools'
 $SrcFile   = Join-Path $Root 'config\sources.json'        # bibliothèques de profils partagés
 $SrcCache  = Join-Path $Root 'config\sources-cache'       # copies locales des bibliothèques Git
 $ShLocFile = Join-Path $Root 'config\shared-local.json'   # dossier de travail choisi pour chaque profil partagé
+$ProjFile  = Join-Path $Root 'config\projects.json'       # projets récents (partagé avec FLOW.exe)
+$ProjectsRoot = Split-Path $Root -Parent                  # les projets proposés : dossiers voisins de FLOW
+$ProjectDir = $null                                       # projet courant (-Project, touche J) ; $null = dossiers des profils
+$ProjSlug  = ''
 $Sources   = @()
 
 # Environnement propre : pas de NO_COLOR hérité, rendu ANSI forcé
@@ -180,7 +187,97 @@ function Next-Order {
 
 function SessionName($p) {
     $s = if ($p.session) { [string]$p.session } else { "flow-$($p.Id)" }
+    if ($ProjectDir) { $s = "$s--$ProjSlug" }    # un même profil peut tourner dans plusieurs projets
     $s -replace '[:.\s]', '-'
+}
+
+# dossier de travail d'un profil (ou d'un de ses panneaux) : le projet courant l'emporte
+function PCwd($p, $pane) {
+    if ($ProjectDir) { return $ProjectDir }
+    Dir-OrRoot $(if ($pane -and $pane.cwd) { $pane.cwd } else { $p.cwd })
+}
+
+# ───────────────────────── projets ─────────────────────────
+function Get-RecentProjects {
+    try { @((Get-Content -LiteralPath $ProjFile -Raw -Encoding utf8 -ErrorAction Stop | ConvertFrom-Json).recent) } catch { @() }
+}
+
+function Set-Project([string]$dir) {
+    if (-not $dir) { $script:ProjectDir = $null; $script:ProjSlug = ''; $Host.UI.RawUI.WindowTitle = 'FLOW'; return }
+    $d = [IO.Path]::GetFullPath(([Environment]::ExpandEnvironmentVariables($dir.Trim().Trim('"')) -replace '^~', $HOME)).TrimEnd('\')
+    if (-not (Test-Path -LiteralPath $d -PathType Container)) { throw "dossier de projet introuvable : $d" }
+    $script:ProjectDir = $d
+    $script:ProjSlug = Slugify (Split-Path $d -Leaf) 'projet'
+    $Host.UI.RawUI.WindowTitle = "FLOW · $(Split-Path $d -Leaf)"
+    $rec = @(Get-RecentProjects | Where-Object { $_.path -and ([string]$_.path).TrimEnd('\') -ne $d })
+    $rec = @([pscustomobject]@{ path = $d; last = (Get-Date).ToString('s') }) + $rec | Select-Object -First 30
+    try {
+        New-Item -ItemType Directory -Force (Split-Path $ProjFile) | Out-Null
+        [pscustomobject]@{ recent = @($rec) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ProjFile -Encoding utf8
+    } catch {}
+}
+
+function Get-ProjectList {
+    $map = [ordered]@{}
+    foreach ($r in Get-RecentProjects) {
+        $d = ([string]$r.path).TrimEnd('\')
+        if ($d -and (Test-Path -LiteralPath $d -PathType Container) -and -not $map.Contains($d)) {
+            $map[$d] = [pscustomobject]@{ Dir = $d; Name = (Split-Path $d -Leaf); Last = [string]$r.last }
+        }
+    }
+    foreach ($dd in (Get-ChildItem -LiteralPath $ProjectsRoot -Directory -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        if ($dd.FullName.TrimEnd('\') -eq $Root.TrimEnd('\') -or $dd.Name.StartsWith('.')) { continue }
+        # <projet>-flow : copies de travail du mode Équipe
+        if ($dd.Name -match '^(.+)-flow$' -and (Test-Path -LiteralPath (Join-Path $ProjectsRoot $Matches[1]))) { continue }
+        if (-not $map.Contains($dd.FullName)) { $map[$dd.FullName] = [pscustomobject]@{ Dir = $dd.FullName; Name = $dd.Name; Last = '' } }
+    }
+    @($map.Values)
+}
+
+function Invoke-ProjectPick {
+    # renvoie un message pour le sélecteur
+    $items = @([pscustomobject]@{ Kind = 'none'; Name = 'aucun projet'; Dir = '' }) +
+             @(Get-ProjectList | ForEach-Object { $_ | Add-Member -NotePropertyName Kind -NotePropertyValue 'dir' -PassThru -Force }) +
+             @([pscustomobject]@{ Kind = 'new'; Name = 'nouveau projet…'; Dir = '' }, [pscustomobject]@{ Kind = 'path'; Name = 'autre dossier…'; Dir = '' })
+    $i = Pick-Item '◆ PROJET — où Claude doit-il travailler ?' $items {
+        param($x)
+        switch ($x.Kind) {
+            'none' { "$Dm◇ aucun projet$R $Dm(chaque profil garde son dossier)$R" }
+            'new'  { "$Ok＋ nouveau projet…$R" }
+            'path' { "$Info↗ autre dossier…$R" }
+            default {
+                $cur = if ($ProjectDir -and $x.Dir -eq $ProjectDir) { " $Ok● actuel$R" } else { '' }
+                $git = if (Test-Path -LiteralPath (Join-Path $x.Dir '.git')) { " $Dm git$R" } else { '' }
+                "▣ $($x.Name)$git$cur"
+            }
+        }
+    } { param($x) if ($x.Dir) { "$Dm dossier$R  $($x.Dir)" } elseif ($x.Kind -eq 'new') { "$Dm créé dans$R  $ProjectsRoot" } }
+    if ($i -lt 0) { return '' }
+    $x = $items[$i]
+    switch ($x.Kind) {
+        'none' { Set-Project $null; return "$Info◇ sans projet : chaque profil s'ouvre dans son propre dossier$R" }
+        'path' {
+            $d = Read-Line '◆ PROJET' 'Chemin du dossier :' $(if ($ProjectDir) { $ProjectDir } else { $ProjectsRoot }) {
+                param($v) if (-not (Test-Path -LiteralPath ([Environment]::ExpandEnvironmentVariables($v.Trim('"')) -replace '^~', $HOME) -PathType Container)) { 'dossier introuvable' }
+            }
+            if ($null -eq $d) { return '' }
+            Set-Project $d
+        }
+        'new' {
+            $n = Read-Line '◆ NOUVEAU PROJET' "Nom du dossier (dans $ProjectsRoot) :" '' {
+                param($v) if (-not $v.Trim()) { 'nom vide' } elseif ($v.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0) { 'caractère interdit' }
+            }
+            if ($null -eq $n) { return '' }
+            $d = Join-Path $ProjectsRoot $n.Trim()
+            if (-not (Test-Path -LiteralPath $d)) {
+                New-Item -ItemType Directory -Force $d | Out-Null
+                if (Get-Command git -ErrorAction SilentlyContinue) { & git -C $d init -b main *> $null }
+            }
+            Set-Project $d
+        }
+        default { Set-Project $x.Dir }
+    }
+    "$Ok▣ projet : $(Split-Path $ProjectDir -Leaf)$R $Dm($ProjectDir)$R"
 }
 
 function Uses-Role($p, [string]$role) {
@@ -260,13 +357,13 @@ function Watch-Arg($p, $monPane) {
     $map = [ordered]@{}
     foreach ($pn in @(Claude-Panes $p)) {
         $a = Acct-For $pn $p
-        if ($a -and -not $map.Contains($a.Id)) { $map[$a.Id] = @{ A = $a; Cwd = (Dir-OrRoot $(if ($pn.cwd) { $pn.cwd } else { $p.cwd })) } }
+        if ($a -and -not $map.Contains($a.Id)) { $map[$a.Id] = @{ A = $a; Cwd = (PCwd $p $pn) } }
     }
     if ($monPane.allAccounts -ne $false) {
         # les autres comptes activés : limites seulement (moniteur partagé)
         foreach ($a in $Accounts) { if ($a.Enabled -and -not $map.Contains($a.Id)) { $map[$a.Id] = @{ A = $a; Cwd = '' } } }
     }
-    if (-not $map.Count) { $a = Default-Acct; $map[$a.Id] = @{ A = $a; Cwd = (Dir-OrRoot $p.cwd) } }
+    if (-not $map.Count) { $a = Default-Acct; $map[$a.Id] = @{ A = $a; Cwd = (PCwd $p $null) } }
     (@($map.Values | ForEach-Object { "$($_.A.Label)|$($_.A.Hex)|$($_.A.Home)|$($_.Cwd)|$($_.A.Id)|$($_.A.Short)" })) -join ';'
 }
 
@@ -360,7 +457,7 @@ function Ensure-StatusLine([string]$claudeDir) {
 function Q([string]$s) { "'" + ($s -replace "'", "''") + "'" }   # chaîne PowerShell entre apostrophes
 
 function Pane-Command($pane, $p) {
-    $cd = Dir-OrRoot $(if ($pane.cwd) { $pane.cwd } else { $p.cwd })
+    $cd = PCwd $p $pane
     $pre = "Set-Location -LiteralPath $(Q $cd); " + (Acct-Env (Acct-For $pane $p))
     switch ([string]$pane.role) {
         'claude'  { return ("${pre}Clear-Host; claude $($pane.args)").TrimEnd() }
@@ -418,8 +515,8 @@ function Start-FlowProfile($p) {
         if ($a -and -not $a.Logged) { Step "$Warn⚠ compte « $($a.Label) » pas encore connecté : Claude proposera de se connecter$R" }
     }
 
-    $cwd = Dir-OrRoot $p.cwd
-    $win = if ($p.window) { [string]$p.window } else { 'flow' }
+    $cwd = PCwd $p $null
+    $win =if ($p.window) { [string]$p.window } else { 'flow' }
 
     Step "création de la session $Dm$s$R"
     & psmux -L $Sock -f $Conf new-session -d -s $s -n $win -c $cwd *> $null
@@ -951,7 +1048,7 @@ function Prepare-Launch($p) {
     # renvoie @{ P = profil prêt (ou $null) ; Msg ; Asked = un écran de saisie a été affiché }
     if (-not $p.Shared) { return @{ P = $p } }
     $asked = $false
-    $cwd = [string]$p.cwd
+    $cwd = if ($ProjectDir) { $ProjectDir } else { [string]$p.cwd }   # avec un projet, pas de question
     if (-not $cwd -or -not (Test-Path -LiteralPath $cwd -PathType Container)) {
         $cwd = Ask-SharedCwd $p; $asked = $true
         if ($null -eq $cwd) { return @{ Msg = "$Dm lancement annulé$R"; Asked = $true } }
@@ -1196,27 +1293,46 @@ function Invoke-Accounts($profiles) {
 }
 
 # ───────────────────────── raccourci bureau ─────────────────────────
-function Install-Shortcut {
-    $desk = [Environment]::GetFolderPath('Desktop')
-    $lnkPath = Join-Path $desk 'FLOW.lnk'
-    $script = Join-Path $Root 'FLOW.ps1'
-    $wt = (Get-Command wt.exe -ErrorAction SilentlyContinue).Source
-    $pw = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
-    $ws = New-Object -ComObject WScript.Shell
-    $lnk = $ws.CreateShortcut($lnkPath)
-    if ($wt) {
-        $lnk.TargetPath = $wt
-        $lnk.Arguments = "-w new --title FLOW pwsh -NoProfile -ExecutionPolicy Bypass -File `"$script`""
-    } else {
-        $lnk.TargetPath = $pw
-        $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$script`""
-    }
-    $lnk.WorkingDirectory = $Root
+function Build-App {
+    # compile app\FlowApp.cs → FLOW.exe (csc du .NET Framework, présent sur tout Windows 10/11)
+    $src = Join-Path $Root 'app\FlowApp.cs'
+    $exe = Join-Path $Root 'FLOW.exe'
+    $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+    if (-not (Test-Path -LiteralPath $csc)) { $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe' }
+    if (-not (Test-Path -LiteralPath $src) -or -not (Test-Path -LiteralPath $csc)) { return $null }
     $ico = Join-Path $Root 'assets\flow.ico'
-    if (Test-Path -LiteralPath $ico) { $lnk.IconLocation = "$ico,0" }
-    $lnk.Description = 'FLOW — sélecteur de profils Claude × psmux'
-    $lnk.Save()
-    $lnkPath
+    $cargs = @('/nologo', '/target:winexe', '/optimize+', "/out:$exe", '/r:System.Web.Extensions.dll', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll')
+    if (Test-Path -LiteralPath $ico) { $cargs += "/win32icon:$ico" }
+    $out = & $csc @cargs $src 2>&1
+    if ($LASTEXITCODE -ne 0) { Write-Host "compilation de FLOW.exe impossible :`n$($out -join "`n")" -ForegroundColor Yellow; return $null }
+    $exe
+}
+
+function Install-Shortcut {
+    # raccourcis « FLOW » (bureau + menu Démarrer) vers l'application FLOW.exe.
+    # Ne jamais viser wt.exe / pwsh.exe directement : ce sont des alias vers un dossier WindowsApps versionné,
+    # que le raccourci fige et qui disparaît à la mise à jour suivante de Windows Terminal.
+    $exe = Build-App
+    $ws = New-Object -ComObject WScript.Shell
+    $ico = Join-Path $Root 'assets\flow.ico'
+    $menu = Join-Path ([Environment]::GetFolderPath('Programs')) 'FLOW.lnk'
+    $paths = @((Join-Path ([Environment]::GetFolderPath('Desktop')) 'FLOW.lnk'), $menu)
+    foreach ($lnkPath in $paths) {
+        $lnk = $ws.CreateShortcut($lnkPath)
+        if ($exe) {
+            $lnk.TargetPath = $exe
+            $lnk.Arguments = ''
+        } else {
+            $lnk.TargetPath = Join-Path $env:WINDIR 'System32\cmd.exe'
+            $lnk.Arguments = "/c `"$(Join-Path $Root 'FLOW.cmd')`""
+            $lnk.WindowStyle = 7
+        }
+        $lnk.WorkingDirectory = $Root
+        if (Test-Path -LiteralPath $ico) { $lnk.IconLocation = "$ico,0" }
+        $lnk.Description = 'FLOW — choisir un projet, puis Claude × psmux'
+        $lnk.Save()
+    }
+    $paths -join ' · '
 }
 
 # ───────────────────────── sélecteur ─────────────────────────
@@ -1283,7 +1399,8 @@ $HelpLines = @(
     (HelpRow 'C' 'comptes Claude / connexion'     'R' 'recharger + synchroniser')
     (HelpRow 'P' 'publier (partager le profil)'   'B' 'bibliothèques partagées')
     (HelpRow 'O' 'dossier d''un profil partagé'   'D' 'sur un partagé : copie à toi')
-    (HelpRow 'Q / Échap' 'quitter'                '?' 'cette aide')
+    (HelpRow 'J' 'changer de projet'              'Q / Échap' 'quitter')
+    (Key '?' 'cette aide')
     ''
     "$Dm Dans une session :$R $(Key 'Ctrl+B D' 'ou') $(Key 'Ctrl+B F' 'revenir ici')"
     "   $(Key 'Alt+flèches' 'changer de panneau')   $(Key 'Alt+Z' 'agrandir le panneau')"
@@ -1321,6 +1438,9 @@ function Draw-Selector($U, $deps) {
     $al = @($Accounts | Where-Object { $_.Enabled } | ForEach-Object {
             if ($_.Logged) { "$(RgbA $_.Rgb)●$R $Dm$($_.Label)$R" } else { "$(RgbA $_.Rgb)○$R $Warn$($_.Label) (C)$R" } })
     if ($al.Count -gt 1 -or @($Accounts | Where-Object { -not $_.Logged }).Count) { $dl += "   $Dm│$R  " + ($al -join '  ') }
+    # projet courant (touche J)
+    $pj = if ($ProjectDir) { "$B$(PalC ($ph + 0.2))▣ $(Split-Path $ProjectDir -Leaf)$R" } else { "$Dm◇ sans projet$R" }
+    $dl = "$pj $Dm(J)$R   $Dm│$R  " + $dl
 
     # — en-tête —
     if ($compact) {
@@ -1396,7 +1516,7 @@ function Draw-Selector($U, $deps) {
         $L.Add("   $bc╭─ $R$B$(PalC ($ph + 0.5))◈$R$B APERÇU$R $bc$('─' * [Math]::Max(0, $pw - 11))╮$R")
         foreach ($pl in (Preview $p ($pw - 2) 9)) { $L.Add("   $bc│$R $(Fit $pl ($pw - 2)) $bc│$R") }
         $L.Add("   $bc╰$('─' * $pw)╯$R")
-        $dirTxt = if (-not $p.Shared) { Resolve-Dir $p.cwd } elseif ($p.cwd) { "$($p.cwd) $Dm(O pour changer)$R" } else { "$Warn à choisir au premier lancement$R$(if ($p.cwdHint) { " $Dm(chez l'auteur : « $($p.cwdHint) »)$R" })" }
+        $dirTxt = if ($ProjectDir) { "$ProjectDir $Dm(projet · J pour changer)$R" } elseif (-not $p.Shared) { Resolve-Dir $p.cwd } elseif ($p.cwd) { "$($p.cwd) $Dm(O pour changer)$R" } else { "$Warn à choisir au premier lancement$R$(if ($p.cwdHint) { " $Dm(chez l'auteur : « $($p.cwdHint) »)$R" })" }
         $L.Add("   $Dm dossier$R $dirTxt   $Dm session$R $(SessionName $p)")
     }
 
@@ -1405,7 +1525,7 @@ function Draw-Selector($U, $deps) {
     if ($U.Searching) {
         $L.Add('   ' + ((Key 'tape' 'pour filtrer'), (Key '↑↓' 'choisir'), (Key 'Entrée' 'lancer'), (Key 'Échap' 'effacer') -join '   '))
     } else {
-        $L.Add('   ' + ((Key '↑↓' 'choisir'), (Key 'Entrée' 'lancer'), (Key '/' 'chercher'), (Key 'N' 'nouveau'), (Key 'P' 'partager'), (Key '?' $(if ($U.Help) { 'masquer l''aide' } else { 'toutes les touches' })), (Key 'Q' 'quitter') -join '   '))
+        $L.Add('   ' + ((Key '↑↓' 'choisir'), (Key 'Entrée' 'lancer'), (Key '/' 'chercher'), (Key 'J' 'projet'), (Key 'N' 'nouveau'), (Key 'P' 'partager'), (Key '?' $(if ($U.Help) { 'masquer l''aide' } else { 'toutes les touches' })), (Key 'Q' 'quitter') -join '   '))
     }
     if ($U.Msg) { $L.Add("   $($U.Msg)") }
 
@@ -1544,6 +1664,10 @@ function Show-Selector([string]$msg, [string]$selectId) {
                     $res = Invoke-Publish $cur; & $redraw
                     Reload-Profiles $U $(if ($res.Id) { $res.Id } else { $cur.Id }); $U.Msg = $res.Msg
                 }
+                elseif ($ch -eq 'j') {
+                    $m = Invoke-ProjectPick; & $redraw
+                    Reload-Profiles $U $(if ($n) { $cur.Id } else { $null }); $U.Msg = $m
+                }
                 elseif ($ch -eq 'b') {
                     $res = Invoke-Sources; & $redraw
                     Reload-Profiles $U $null; $U.Msg = $res.Msg
@@ -1655,6 +1779,10 @@ if (-not (Get-Command psmux -ErrorAction SilentlyContinue)) {
     Write-Host "psmux est introuvable. Installe-le avec :  winget install marlocarlo.psmux" -ForegroundColor Red
     Read-Host 'Entrée pour quitter' | Out-Null
     return
+}
+
+if ($Project) {
+    try { Set-Project $Project } catch { Write-Host "$($_.Exception.Message) — FLOW démarre sans projet (J pour en choisir un)" -ForegroundColor Yellow; Start-Sleep 2 }
 }
 
 try {
