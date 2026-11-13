@@ -145,7 +145,7 @@ function Sync-Panes {
         $sig = "$st|$ctx"
         if ($sig -eq $a.PaneSig) { continue }
         $a.PaneSig = $sig
-        $txt = switch ($st) { 'busy' { '● travaille' } 'done' { '✓ à toi' } 'idle' { '○ en attente' } 'off' { '○ non connecté' } default { '' } }
+        $txt = switch ($st) { 'busy' { '● travaille' } 'done' { '✓ à toi' } 'idle' { '○ en attente' } 'off' { '○ non connecté' } 'none' { '○ prêt (aucun message)' } default { '' } }
         foreach ($pn in $PaneMap[$a.Id]) {
             $title = $pn.Base
             if ($txt) { $title += " · $txt" }
