@@ -45,6 +45,10 @@ pwsh -File FLOW.ps1 -InstallShortcut      # (re)crée le raccourci bureau
 | S | capturer une session psmux en cours → nouveau profil |
 | K (×2) / Maj+K (×2) | fermer la session du profil / toutes les sessions FLOW |
 | C | comptes Claude : état, connexion d'un compte |
+| P | publier le profil dans une bibliothèque partagée (voir plus bas) |
+| B | gérer les bibliothèques partagées (ajouter un dossier ou un dépôt Git, synchroniser) |
+| O | profil partagé : changer son dossier de travail sur cette machine |
+| R | recharger les profils et synchroniser les bibliothèques Git |
 | ? | afficher toutes les touches |
 | Q / Échap | quitter |
 
@@ -190,6 +194,34 @@ Sur une autre machine : copier le dossier, installer `psmux` (`winget install ma
 Claude Code et PowerShell 7, puis `pwsh -File FLOW.ps1 -InstallShortcut`.
 Au lancement, FLOW branche `tools/statusline.ps1` dans `settings.json` du compte Claude utilisé
 (sauf si une barre de statut personnelle existe déjà).
+
+## Partager des profils (bibliothèques)
+
+Une **bibliothèque** est un endroit commun où l'équipe dépose ses profils. Deux types, déclarés
+avec la touche **B** (enregistrés dans `config\sources.json`, propre à chaque machine) :
+
+| Type | Exemple | Fonctionnement |
+|---|---|---|
+| Dossier partagé | `~\OneDrive - Entreprise\FLOW-profils`, `\\serveur\partage\flow` | lu et écrit directement |
+| Dépôt Git | `https://github.com/mon-equipe/flow-profils` | cloné dans `config\sources-cache\`, mis à jour au lancement du sélecteur et avec **R** ; publier = commit + push. Les profils sont lus dans `profiles\` s'il existe, sinon à la racine. |
+
+Dans le sélecteur, les profils des bibliothèques apparaissent sous **⇄ partagés**, avec leur auteur.
+
+- **P** publie le profil sélectionné. La version publiée est *portable* : sans dossier de travail
+  (remplacé par un indice, ex. « boutique »), sans nom de session, ordre ni `claudeConfigDir`, sans
+  chemins absolus dans les panneaux. Disposition, rôles, comptes (par identifiant), arguments,
+  commandes et titres sont gardés. Si le nom existe déjà : remplacer ou publier sous un autre nom.
+- **Entrée** lance un profil partagé. La première fois, FLOW demande le dossier de travail sur
+  ta machine (il en propose un s'il trouve un dossier du même nom) et le retient
+  (`config\shared-local.json` ; **O** pour le changer). Un compte inconnu chez toi
+  (ex. `second` alors que tu n'as qu'un compte) est remplacé par ton compte par défaut.
+- **D** sur un profil partagé en fait **ta copie** locale, modifiable (E, F2, réordonner…).
+  Les profils partagés eux-mêmes ne s'éditent pas sur place : republie avec **P**.
+- **Suppr** (×2) retire le profil de la bibliothèque, pour tout le monde (dossier : **U** annule ;
+  dépôt Git : le retrait est poussé).
+
+Pour un dépôt Git privé, chacun doit y avoir accès (invitation sur GitHub) ; la connexion se fait
+avec le gestionnaire d'identifiants de Git ou `gh auth login` puis `gh auth setup-git`.
 
 ## Équipe : un prompt, plusieurs Claude en parallèle
 

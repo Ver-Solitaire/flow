@@ -4,5 +4,10 @@ config/team-projects.json
 profiles/.corbeille/
 *.bak
 
+# bibliothèques de profils partagés : chemins propres à chaque machine (touche B du sélecteur)
+config/sources.json
+config/sources-cache/
+config/shared-local.json
+
 # comptes Claude : chacun a les siens ; install.cmd crée accounts.json depuis accounts.example.json
 config/accounts.json

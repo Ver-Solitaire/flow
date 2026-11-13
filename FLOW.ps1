@@ -31,6 +31,10 @@ $AcctFile  = Join-Path $Root 'config\accounts.json'  # comptes Claude
 $ProfDir   = Join-Path $Root 'profiles'
 $TrashDir  = Join-Path $ProfDir '.corbeille'
 $Tools     = Join-Path $Root 'tools'
+$SrcFile   = Join-Path $Root 'config\sources.json'        # bibliothèques de profils partagés
+$SrcCache  = Join-Path $Root 'config\sources-cache'       # copies locales des bibliothèques Git
+$ShLocFile = Join-Path $Root 'config\shared-local.json'   # dossier de travail choisi pour chaque profil partagé
+$Sources   = @()
 
 # Environnement propre : pas de NO_COLOR hérité, rendu ANSI forcé
 foreach ($v in 'NO_COLOR', 'GIT_TERMINAL_PROMPT') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
@@ -138,9 +142,11 @@ function Get-Profiles {
 }
 
 function Get-ProfilesSig {
-    # empreinte du dossier profiles (+ comptes) : sert à recharger automatiquement après une modification
-    (@(Get-ChildItem -LiteralPath $ProfDir -Filter *.json -File -ErrorAction SilentlyContinue) + @(Get-Item -LiteralPath $AcctFile -ErrorAction SilentlyContinue) |
-        ForEach-Object { "$($_.Name)|$($_.LastWriteTimeUtc.Ticks)" }) -join ';'
+    # empreinte des profils (locaux + partagés) et des réglages : sert à recharger automatiquement après une modification
+    $files = @(Get-ChildItem -LiteralPath $ProfDir -Filter *.json -File -ErrorAction SilentlyContinue)
+    $files += @(Get-Item -LiteralPath $AcctFile, $SrcFile, $ShLocFile -ErrorAction SilentlyContinue)
+    foreach ($src in $Sources) { if ($src.Ok) { $files += @(Get-ChildItem -LiteralPath $src.Dir -Filter *.json -File -ErrorAction SilentlyContinue) } }
+    ($files | ForEach-Object { "$($_.FullName)|$($_.LastWriteTimeUtc.Ticks)" }) -join ';'
 }
 
 function Read-ProfileFile([string]$file) {
@@ -149,13 +155,17 @@ function Read-ProfileFile([string]$file) {
 
 function Write-ProfileFile($p, [string]$file) {
     $o = [ordered]@{}
-    foreach ($pr in $p.PSObject.Properties) { if ($pr.Name -notin 'Id', 'File') { $o[$pr.Name] = $pr.Value } }
+    foreach ($pr in $p.PSObject.Properties) { if ($pr.Name -notin 'Id', 'File', 'Shared', 'SharedSrc', 'SharedKey') { $o[$pr.Name] = $pr.Value } }
     ($o | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $file -Encoding utf8
 }
 
-function New-ProfilePath([string]$name) {
+function Slugify([string]$name, [string]$fallback = 'profil') {
     $slug = ($name.ToLower().Normalize([Text.NormalizationForm]::FormD) -replace '\p{Mn}', '' -replace '[^a-z0-9]+', '-').Trim('-')
-    if (-not $slug) { $slug = 'profil' }
+    if ($slug) { $slug } else { $fallback }
+}
+
+function New-ProfilePath([string]$name) {
+    $slug = Slugify $name
     $file = Join-Path $ProfDir "$slug.json"
     $n = 2; while (Test-Path -LiteralPath $file) { $file = Join-Path $ProfDir "$slug-$n.json"; $n++ }
     $file
@@ -754,15 +764,364 @@ function Move-ProfileOrder($profiles, [int]$from, [int]$to) {
     }
 }
 
+# ───────────────────────── bibliothèques partagées ─────────────────────────
+# config\sources.json : { "sources": [ { "id", "name", "type": "folder", "path" } | { "id", "name", "type": "git", "url", "subdir" } ] }
+#   folder : un dossier commun (partage réseau, OneDrive, Teams…) lu et écrit directement
+#   git    : un dépôt cloné dans config\sources-cache\<id> ; mis à jour au lancement et avec R, publié par commit + push
+# Un profil publié est « portable » : sans dossier de travail ni réglage propre à une machine.
+# Chacun choisit son dossier au premier lancement (retenu dans config\shared-local.json).
+$ShColor = Rgb 168 112 255
+
+function Git-Exe {
+    $g = (Get-Command git -ErrorAction SilentlyContinue).Source
+    if (-not $g -and (Test-Path "$env:ProgramFiles\Git\cmd\git.exe")) { $g = "$env:ProgramFiles\Git\cmd\git.exe" }
+    $g
+}
+
+function Git-Do([string]$dir, [string[]]$gargs) {
+    $g = Git-Exe
+    if (-not $g) { throw 'Git est introuvable (winget install --id Git.Git -e)' }
+    $id = @()
+    if (-not "$(& $g -C $dir config user.email 2>$null)".Trim()) { $id = @('-c', 'user.name=FLOW', '-c', 'user.email=flow@localhost') }
+    $out = & $g -C $dir @id @gargs 2>&1
+    [pscustomobject]@{ Code = $LASTEXITCODE; Out = (($out | ForEach-Object { "$_" }) -join ' ').Trim() }
+}
+
+function Get-Sources {
+    $j = $null
+    try { $j = Get-Content -LiteralPath $SrcFile -Raw -Encoding utf8 | ConvertFrom-Json } catch {}
+    , @(foreach ($s in @($j.sources)) {
+            if (-not $s.id) { continue }
+            $type = if ([string]$s.type -eq 'git') { 'git' } else { 'folder' }
+            $base = if ($type -eq 'git') { Join-Path $SrcCache ([string]$s.id) } elseif ($s.path) { Resolve-Dir ([string]$s.path) } else { '' }
+            $dir = if ($base -and $s.subdir) { Join-Path $base ([string]$s.subdir) } else { $base }
+            [pscustomobject]@{
+                Id = [string]$s.id; Name = $(if ($s.name) { [string]$s.name } else { [string]$s.id }); Type = $type
+                Url = [string]$s.url; Path = [string]$s.path; Subdir = [string]$s.subdir; Base = $base; Dir = $dir
+                Ok = [bool]($dir -and (Test-Path -LiteralPath $dir -PathType Container))
+            }
+        })
+}
+
+function Save-Sources($list) {
+    $arr = @(foreach ($s in $list) {
+            $o = [ordered]@{ id = $s.Id; name = $s.Name; type = $s.Type }
+            if ($s.Type -eq 'git') { $o.url = $s.Url } else { $o.path = $s.Path }
+            if ($s.Subdir) { $o.subdir = $s.Subdir }
+            [pscustomobject]$o
+        })
+    New-Item -ItemType Directory -Force (Split-Path $SrcFile) | Out-Null
+    ([ordered]@{ sources = $arr } | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $SrcFile -Encoding utf8
+}
+
+function Get-SharedLocal {
+    $h = @{}
+    try { $j = Get-Content -LiteralPath $ShLocFile -Raw -Encoding utf8 | ConvertFrom-Json; foreach ($pr in $j.PSObject.Properties) { $h[$pr.Name] = $pr.Value } } catch {}
+    $h
+}
+
+function Set-SharedCwd([string]$key, [string]$cwd) {
+    $h = Get-SharedLocal
+    $h[$key] = [pscustomobject]@{ cwd = $cwd }
+    ($h | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath $ShLocFile -Encoding utf8
+}
+
+function Get-SharedProfiles {
+    $loc = Get-SharedLocal
+    @(foreach ($src in $Sources) {
+            if (-not $src.Ok) { continue }
+            foreach ($f in (Get-ChildItem -LiteralPath $src.Dir -Filter *.json -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+                $j = $null
+                try { $j = Get-Content -LiteralPath $f.FullName -Raw -Encoding utf8 | ConvertFrom-Json } catch {}
+                if (-not $j -or -not $j.rows) { continue }   # pas un profil FLOW
+                $key = "$($src.Id)/$($f.BaseName)"
+                $cwd = if ($loc[$key]) { [string]$loc[$key].cwd } else { $null }
+                $props = [ordered]@{
+                    Id = "sh-$($src.Id)-$($f.BaseName)"; File = $f.FullName; Shared = $src.Name; SharedSrc = $src.Id; SharedKey = $key
+                    session = "flow-sh-$(Slugify $src.Id 'src')-$($f.BaseName)"; cwd = $cwd
+                }
+                if (-not $j.name) { $props.name = $f.BaseName }
+                foreach ($kv in $props.GetEnumerator()) { $j | Add-Member -NotePropertyName $kv.Key -NotePropertyValue $kv.Value -Force }
+                $j
+            }
+        })
+}
+
+function Sync-Source($src, [switch]$Quiet) {
+    # bibliothèque Git : clone (1re fois) ou mise à jour ; renvoie '' ou un message d'erreur
+    if ($src.Type -ne 'git') { return '' }
+    if ($Quiet) { $env:GIT_TERMINAL_PROMPT = '0' }
+    try {
+        if (-not (Test-Path -LiteralPath (Join-Path $src.Base '.git'))) {
+            New-Item -ItemType Directory -Force $SrcCache | Out-Null
+            $r = Git-Do $SrcCache @('clone', '-q', $src.Url, $src.Id)
+            if ($r.Code -ne 0) { return "clonage de « $($src.Name) » impossible : $($r.Out)" }
+        } else {
+            $r = Git-Do $src.Base @('pull', '--ff-only', '-q')
+            if ($r.Code -ne 0 -and $r.Out -notmatch 'no tracking information|no such ref|couldn''t find remote ref') { return "mise à jour de « $($src.Name) » impossible : $($r.Out)" }
+        }
+    } finally { if ($Quiet) { Remove-Item Env:GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue } }
+    ''
+}
+
+function Sync-AllSources([switch]$Quiet) {
+    @(foreach ($src in $Sources) { if ($src.Type -eq 'git') { $m = Sync-Source $src -Quiet:$Quiet; if ($m) { $m } } })
+}
+
+function Start-BackgroundSync {
+    # au démarrage : mise à jour des bibliothèques Git sans bloquer le sélecteur (rechargé tout seul ensuite)
+    if ($script:BgSyncDone) { return }
+    $script:BgSyncDone = $true
+    $dirs = @($Sources | Where-Object { $_.Type -eq 'git' -and (Test-Path -LiteralPath (Join-Path $_.Base '.git')) } | ForEach-Object { $_.Base })
+    $g = Git-Exe
+    if (-not $dirs.Count -or -not $g) { return }
+    $null = Start-Job -ScriptBlock {
+        param($g, $dirs)
+        $env:GIT_TERMINAL_PROMPT = '0'
+        foreach ($d in $dirs) { & $g -C $d pull --ff-only -q *> $null }
+    } -ArgumentList $g, $dirs
+}
+
+function Src-Publish($src, [string]$msg) {
+    # bibliothèque Git : enregistre et envoie les changements ; renvoie '' ou un message d'erreur
+    if ($src.Type -ne 'git') { return '' }
+    $r = Git-Do $src.Base @('add', '-A')
+    $r = Git-Do $src.Base @('commit', '-q', '-m', $msg)
+    if ($r.Code -ne 0 -and $r.Out -notmatch 'nothing to commit|rien à valider') { return "commit impossible : $($r.Out)" }
+    [void](Git-Do $src.Base @('pull', '--rebase', '-q'))   # intègre d'abord les publications des autres
+    $r = Git-Do $src.Base @('push', '-q', '-u', 'origin', 'HEAD')
+    if ($r.Code -ne 0) { return "envoi refusé : $($r.Out)" }
+    ''
+}
+
+function Author-Name {
+    $g = Git-Exe
+    $n = if ($g) { "$(& $g config --global user.name 2>$null)".Trim() } else { '' }
+    if ($n) { $n } else { $env:USERNAME }
+}
+
+function Export-Portable($p) {
+    # copie publiable d'un profil : sans chemins absolus ni réglages propres à cette machine
+    $j = Read-ProfileFile $p.File
+    if ($j.cwd -and -not $p.Shared) {
+        $j | Add-Member -NotePropertyName cwdHint -NotePropertyValue (Split-Path (Resolve-Dir ([string]$j.cwd)) -Leaf) -Force
+    }
+    foreach ($nm in 'cwd', 'session', 'claudeConfigDir', 'order') { $j.PSObject.Properties.Remove($nm) }
+    foreach ($row in @($j.rows)) {
+        foreach ($pn in @($row.panes)) {
+            if ($pn.cwd -and [IO.Path]::IsPathRooted(([Environment]::ExpandEnvironmentVariables([string]$pn.cwd) -replace '^~', $HOME))) { $pn.PSObject.Properties.Remove('cwd') }
+            $pn.PSObject.Properties.Remove('claudeConfigDir')
+        }
+    }
+    $j | Add-Member -NotePropertyName author -NotePropertyValue (Author-Name) -Force
+    $j | Add-Member -NotePropertyName published -NotePropertyValue (Get-Date -Format 'yyyy-MM-dd HH:mm') -Force
+    $j
+}
+
+function Guess-Dir([string]$hint) {
+    # dossier probable sur cette machine pour un profil partagé (même nom que chez l'auteur)
+    if (-not $hint) { return '' }
+    foreach ($c in @((Join-Path (Split-Path $Root) $hint), (Join-Path $HOME "Documents\$hint"), (Join-Path $HOME "source\repos\$hint"), (Join-Path $HOME $hint))) {
+        if (Test-Path -LiteralPath $c -PathType Container) { return $c }
+    }
+    ''
+}
+
+function Ask-SharedCwd($p) {
+    # demande (et retient) le dossier de travail d'un profil partagé ; renvoie le chemin ou $null
+    $hints = @()
+    if ($p.cwdHint) { $hints += "chez l'auteur : un dossier nommé « $($p.cwdHint) »" }
+    $hints += 'chemin absolu (ou relatif au dossier FLOW) — retenu pour les prochains lancements (O pour le changer)'
+    $def = if ($p.cwd) { [string]$p.cwd } else { Guess-Dir ([string]$p.cwdHint) }
+    $v = Read-Line "◆ PROFIL PARTAGÉ — $($p.name)" 'Dossier de travail sur cette machine :' $def {
+        param($v)
+        if (-not $v) { return 'indique un dossier' }
+        if (-not (Test-Path -LiteralPath (Resolve-Dir $v) -PathType Container)) { "dossier introuvable : $(Resolve-Dir $v)" }
+    } $hints
+    if ($null -eq $v) { return $null }
+    $full = Resolve-Dir $v
+    Set-SharedCwd $p.SharedKey $full
+    $full
+}
+
+function Prepare-Launch($p) {
+    # profil partagé : dossier de travail de cette machine + comptes inconnus ramenés au compte par défaut
+    # renvoie @{ P = profil prêt (ou $null) ; Msg ; Asked = un écran de saisie a été affiché }
+    if (-not $p.Shared) { return @{ P = $p } }
+    $asked = $false
+    $cwd = [string]$p.cwd
+    if (-not $cwd -or -not (Test-Path -LiteralPath $cwd -PathType Container)) {
+        $cwd = Ask-SharedCwd $p; $asked = $true
+        if ($null -eq $cwd) { return @{ Msg = "$Dm lancement annulé$R"; Asked = $true } }
+    }
+    $q = $p | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $q | Add-Member -NotePropertyName cwd -NotePropertyValue $cwd -Force
+    $q | Add-Member -NotePropertyName File -NotePropertyValue $null -Force   # Ctrl+B W ne réécrit pas la bibliothèque
+    $known = { param($id) [bool]($Accounts | Where-Object { $_.Id -eq $id }) }
+    if ($q.account -and -not (& $known ([string]$q.account))) { $q.PSObject.Properties.Remove('account') }
+    foreach ($row in @($q.rows)) {
+        foreach ($pn in @($row.panes)) { if ($pn.account -and -not (& $known ([string]$pn.account))) { $pn.PSObject.Properties.Remove('account') } }
+    }
+    @{ P = $q; Asked = $asked }
+}
+
+function Invoke-Publish($p) {
+    $srcs = @($Sources | Where-Object { $_.Ok })
+    if (-not $srcs.Count) { return @{ Msg = "$Warn aucune bibliothèque partagée — B pour en ajouter une$R" } }
+    $src = $srcs[0]
+    if ($srcs.Count -gt 1) {
+        $i = Pick-Item "◆ PUBLIER « $($p.name) » — dans quelle bibliothèque ?" $srcs { param($x) "$ShColor⇄$R $($x.Name)  $Dm$(if ($x.Type -eq 'git') { $x.Url } else { $x.Dir })$R" } $null
+        if ($i -lt 0) { return @{ Msg = "$Dm publication annulée$R" } }
+        $src = $srcs[$i]
+    }
+    $base = if ($p.Shared) { [IO.Path]::GetFileNameWithoutExtension($p.File) } else { $p.Id }
+    $dest = Join-Path $src.Dir "$base.json"
+    if ((Test-Path -LiteralPath $dest) -and $dest -ne $p.File) {
+        $ex = $null; try { $ex = Read-ProfileFile $dest } catch {}
+        $who = if ($ex.author) { " (publié par $($ex.author)$(if ($ex.published) { " le $($ex.published)" }))" } else { '' }
+        $ch = Pick-Item "◆ PUBLIER — « $base » existe déjà dans $($src.Name)$who" @('Remplacer la version partagée', 'Publier sous un autre nom', 'Annuler') { param($x) $x } $null
+        if ($ch -eq 1) { $n = 2; while (Test-Path -LiteralPath (Join-Path $src.Dir "$base-$n.json")) { $n++ }; $base = "$base-$n"; $dest = Join-Path $src.Dir "$base.json" }
+        elseif ($ch -ne 0) { return @{ Msg = "$Dm publication annulée$R" } }
+    }
+    $j = Export-Portable $p
+    Write-ProfileFile $j $dest
+    $pubErr = Src-Publish $src "FLOW : profil « $($p.name) » publié par $($j.author)"
+    if ($pubErr) { return @{ Msg = "$Err✗ $($src.Name) : $pubErr (le fichier est prêt dans la copie locale, R pour réessayer plus tard)$R" } }
+    @{ Msg = "$Ok⇄ « $($p.name) » publié dans $($src.Name) — les autres le voient au prochain R$R"; Id = "sh-$($src.Id)-$base" }
+}
+
+function Invoke-ImportShared($p) {
+    # D sur un profil partagé : copie locale modifiable (dossier de travail et comptes adaptés à cette machine)
+    $prep = Prepare-Launch $p
+    if (-not $prep.P) { return $prep }
+    $q = $prep.P
+    $file = New-ProfilePath $p.name
+    $id = [IO.Path]::GetFileNameWithoutExtension($file)
+    $q | Add-Member -NotePropertyName order -NotePropertyValue (Next-Order) -Force
+    $q | Add-Member -NotePropertyName session -NotePropertyValue "flow-$id" -Force
+    $q | Add-Member -NotePropertyName from -NotePropertyValue "$($p.Shared)$(if ($p.author) { " · $($p.author)" })" -Force
+    foreach ($nm in 'cwdHint', 'published', 'author') { $q.PSObject.Properties.Remove($nm) }
+    Write-ProfileFile $q $file
+    @{ Msg = "$Ok✓ copie locale « $($p.name) » créée — à toi de la modifier (E, F2…)$R"; Id = $id; Asked = $prep.Asked }
+}
+
+function Remove-Shared($p) {
+    # Suppr ×2 sur un profil partagé : le retire de la bibliothèque (pour tout le monde)
+    $src = $Sources | Where-Object { $_.Id -eq $p.SharedSrc } | Select-Object -First 1
+    if ($src -and $src.Type -eq 'git') {
+        Remove-Item -LiteralPath $p.File -Force
+        $pubErr = Src-Publish $src "FLOW : profil « $($p.name) » retiré par $(Author-Name)"
+        if ($pubErr) { return @{ Msg = "$Err✗ $($src.Name) : $pubErr$R" } }
+        return @{ Msg = "$Warn✗ « $($p.name) » retiré de $($src.Name)$R" }
+    }
+    $dest = Remove-ProfileToTrash $p
+    @{ Msg = "$Warn✗ « $($p.name) » retiré de $($p.Shared) — $B U$R$Warn pour annuler$R"; Undo = @{ From = $dest; To = $p.File; Id = $p.Id; Name = $p.name } }
+}
+
+function New-SourceId([string]$name) {
+    $id = Slugify $name 'biblio'; $n = 2
+    while ($Sources | Where-Object { $_.Id -eq $id }) { $id = "$(Slugify $name 'biblio')-$n"; $n++ }
+    $id
+}
+
+function Add-FolderSource {
+    $v = Read-Line '◆ AJOUTER UN DOSSIER PARTAGÉ' 'Dossier commun (partage réseau, OneDrive, Teams…) :' '' {
+        param($v)
+        if (-not $v) { return 'indique un dossier' }
+        $d = Resolve-Dir $v
+        if (-not (Test-Path -LiteralPath $d -PathType Container)) {
+            $par = Split-Path $d
+            if (-not $par -or -not (Test-Path -LiteralPath $par -PathType Container)) { "dossier introuvable : $d" }
+        }
+    } @('créé s''il n''existe pas (son dossier parent doit exister)', 'ex. : ~\OneDrive - Entreprise\FLOW-profils   ou   \\serveur\partage\flow')
+    if ($null -eq $v) { return $null }
+    $d = Resolve-Dir $v
+    New-Item -ItemType Directory -Force $d | Out-Null
+    $nm = Read-Line '◆ AJOUTER UN DOSSIER PARTAGÉ' 'Nom affiché de la bibliothèque :' (Split-Path $d -Leaf) { param($v) if (-not $v) { 'le nom ne peut pas être vide' } }
+    if ($null -eq $nm) { return $null }
+    $list = @($Sources) + [pscustomobject]@{ Id = (New-SourceId $nm); Name = $nm; Type = 'folder'; Path = $d; Url = ''; Subdir = '' }
+    Save-Sources $list
+    "$Ok⇄ bibliothèque « $nm » ajoutée ($d)$R"
+}
+
+function Add-GitSource {
+    $url = Read-Line '◆ AJOUTER UN DÉPÔT GIT' 'Adresse du dépôt de profils :' '' { param($v) if (-not $v) { 'indique une adresse' } } @(
+        'ex. : https://github.com/mon-equipe/flow-profils   (dépôt privé : l''équipe y est invitée)',
+        'les profils sont lus dans profiles\ s''il existe, sinon à la racine du dépôt')
+    if ($null -eq $url) { return $null }
+    $leaf = (($url.TrimEnd('/', '\') -split '[/\\:]')[-1]) -replace '\.git$', ''
+    $nm = Read-Line '◆ AJOUTER UN DÉPÔT GIT' 'Nom affiché de la bibliothèque :' $leaf { param($v) if (-not $v) { 'le nom ne peut pas être vide' } }
+    if ($null -eq $nm) { return $null }
+    $src = [pscustomobject]@{ Id = (New-SourceId $nm); Name = $nm; Type = 'git'; Url = $url; Path = ''; Subdir = ''; Base = ''; Dir = '' }
+    $src.Base = Join-Path $SrcCache $src.Id
+    [Console]::Write("$e[2J$e[H"); Write-Host "`n   $(Grad "◆ clonage de $url…" 0.1 0.03)`n"
+    $syncErr = Sync-Source $src
+    if ($syncErr) { return "$Err✗ $syncErr$R" }
+    if (Test-Path -LiteralPath (Join-Path $src.Base 'profiles') -PathType Container) { $src.Subdir = 'profiles' }
+    Save-Sources (@($Sources) + $src)
+    "$Ok⇄ bibliothèque « $nm » ajoutée$(if ($src.Subdir) { ' (dossier profiles\)' })$R"
+}
+
+function Invoke-Sources {
+    # B : gérer les bibliothèques partagées
+    while ($true) {
+        $script:Sources = Get-Sources
+        $items = @($Sources) + @('+folder', '+git', '+sync')
+        $i = Pick-Item '◆ BIBLIOTHÈQUES PARTAGÉES ⇄' $items {
+            param($x)
+            switch ($x) {
+                '+folder' { return "$Ok+$R ajouter un dossier partagé $Dm(réseau, OneDrive, Teams…)$R" }
+                '+git'    { return "$Ok+$R ajouter un dépôt Git $Dm(GitHub, GitLab…)$R" }
+                '+sync'   { return "$Info↻$R tout synchroniser maintenant" }
+            }
+            $nb = if ($x.Ok) { @(Get-ChildItem -LiteralPath $x.Dir -Filter *.json -File -ErrorAction SilentlyContinue).Count } else { 0 }
+            $st = if ($x.Ok) { "$Dm$nb fichier(s)$R" } else { "$Err✗ introuvable$R" }
+            "$ShColor⇄$R $B$($x.Name)$R  $Dm$(if ($x.Type -eq 'git') { 'git' } else { 'dossier' })$R  $st"
+        } {
+            param($x)
+            if ($x -is [string]) {
+                switch ($x) {
+                    '+folder' { @("$Dm Un dossier que toute l'équipe voit. Chacun l'ajoute ici avec son propre chemin.$R") }
+                    '+git'    { @("$Dm Un dépôt Git commun : FLOW le clone, le met à jour (R) et y publie (commit + push).$R") }
+                    '+sync'   { @("$Dm Récupère les dernières publications des bibliothèques Git.$R") }
+                }
+            } else {
+                @("$Dm emplacement$R  $(if ($x.Type -eq 'git') { $x.Url } else { $x.Dir })",
+                  "$Dm profils lus dans$R  $($x.Dir)",
+                  '', "$Dm P dans la liste publie le profil sélectionné ; Suppr ×2 sur un profil partagé le retire.$R")
+            }
+        }
+        if ($i -lt 0) { return @{ Msg = '' } }
+        $it = $items[$i]
+        if ($it -eq '+folder') { $m = Add-FolderSource; if ($m) { return @{ Msg = $m } }; continue }
+        if ($it -eq '+git') { $m = Add-GitSource; if ($m) { return @{ Msg = $m } }; continue }
+        if ($it -eq '+sync') {
+            $errs = Sync-AllSources
+            return @{ Msg = $(if ($errs.Count) { "$Err✗ $($errs -join ' · ')$R" } else { "$Ok↻ bibliothèques à jour$R" }) }
+        }
+        $acts = @('Synchroniser maintenant', 'Ouvrir le dossier', 'Retirer de la liste (les fichiers ne sont pas supprimés)', 'Retour')
+        $a = Pick-Item "◆ $($it.Name)" $acts { param($x) $x } $null
+        switch ($a) {
+            0 { $m = Sync-Source $it; return @{ Msg = $(if ($m) { "$Err✗ $m$R" } else { "$Ok↻ « $($it.Name) » à jour$R" }) } }
+            1 { if ($it.Ok) { Start-Process explorer.exe -ArgumentList "`"$($it.Dir)`"" }; return @{ Msg = "$Info↗ $($it.Dir)$R" } }
+            2 {
+                Save-Sources @($Sources | Where-Object { $_.Id -ne $it.Id })
+                return @{ Msg = "$Warn✗ « $($it.Name) » retirée de la liste$R" }
+            }
+        }
+    }
+}
+
 # ───────────────────────── écran des comptes ─────────────────────────
 function Acct-Chips($p) {
     # pastilles des comptes utilisés par les panneaux Claude d'un profil (affichées dans la liste)
     $bad = Bad-Accounts $p
-    if ($bad.Count) { return "  $Err✗ compte inconnu : $($bad -join ', ')$R" }
+    if ($bad.Count -and -not $p.Shared) { return "  $Err✗ compte inconnu : $($bad -join ', ')$R" }
     if (-not ((Multi-Accounts) -or $p.account -or $p.claudeConfigDir -or @(Claude-Panes $p | Where-Object { $_.account }).Count)) { return '' }
     $seen = @{}
     $chips = foreach ($pn in @(Claude-Panes $p)) {
         $a = Acct-For $pn $p
+        if (-not $a -and $p.Shared) { $a = Default-Acct }   # profil partagé : compte inconnu ici → compte par défaut
         if (-not $a -or $seen[$a.Id]) { continue }
         $seen[$a.Id] = $true
         "$(RgbA $a.Rgb)◆ $($a.Label)$R$(if (-not $a.Logged) { "$Warn ○$R" })"
@@ -891,6 +1250,7 @@ function Preview($p, [int]$PW, [int]$PH) {
                 if ([string]$pane.role -eq 'claude' -and ((Multi-Accounts) -or $pane.account -or $p.account)) {
                     # panneau Claude : couleur et nom court du compte
                     $ac = Acct-For $pane $p
+                    if (-not $ac -and $p.Shared) { $ac = Default-Acct }
                     if ($ac) { $rgb = $ac.Rgb; $lbl = "claude $($ac.Short)" } else { $rgb = @(255, 90, 90); $lbl = 'compte ?' }
                 }
                 $bc = if ($pane.focus) { RgbA $rgb } else { RgbA (Mix $rgb @(30,30,40) 0.55) }
@@ -918,7 +1278,9 @@ $HelpLines = @(
     (HelpRow 'E' 'éditer le JSON'                 'Suppr' 'supprimer (×2, U annule)')
     (HelpRow 'Maj+↑↓' 'déplacer (+/− pavé num.)'  'S' 'capturer une session')
     (HelpRow 'K' 'fermer la session (×2)'         'Maj+K' 'fermer toutes (×2)')
-    (HelpRow 'C' 'comptes Claude / connexion'     'R' 'recharger')
+    (HelpRow 'C' 'comptes Claude / connexion'     'R' 'recharger + synchroniser')
+    (HelpRow 'P' 'publier (partager le profil)'   'B' 'bibliothèques partagées')
+    (HelpRow 'O' 'dossier d''un profil partagé'   'D' 'sur un partagé : copie à toi')
     (HelpRow 'Q / Échap' 'quitter'                '?' 'cette aide')
     ''
     "$Dm Dans une session :$R $(Key 'Ctrl+B D' 'ou') $(Key 'Ctrl+B F' 'revenir ici')"
@@ -937,7 +1299,8 @@ function Update-View($U, [string]$keepId) {
 
 function Reload-Profiles($U, [string]$keepId) {
     $script:Accounts = Get-Accounts
-    $U.Profiles = Get-Profiles
+    $script:Sources = Get-Sources
+    $U.Profiles = @(Get-Profiles) + @(Get-SharedProfiles)   # les tiens, puis ceux des bibliothèques
     $U.Sig = Get-ProfilesSig
     Update-View $U $keepId
     $U.Refresh = $true
@@ -981,8 +1344,9 @@ function Draw-Selector($U, $deps) {
     $prevH = if ($U.Help) { $HelpLines.Count + 3 } elseif ($showPrev) { 13 } else { 0 }
     $footer = 3
     $avail = $H - 1 - $L.Count - $prevH - $footer - 1
-    $cap = [Math]::Max(1, [int][Math]::Floor($avail / 2))
     $n = $U.View.Count
+    $hasSh = [bool]($U.View | Where-Object { $_.Shared } | Select-Object -First 1)
+    $cap = [Math]::Max(1, [int][Math]::Floor(($avail - [int]$hasSh) / 2))   # 1 ligne pour le titre « partagés »
     if ($U.Sel -lt $U.Top) { $U.Top = $U.Sel }
     if ($U.Sel -ge $U.Top + $cap) { $U.Top = $U.Sel - $cap + 1 }
     $U.Top = [Math]::Max(0, [Math]::Min($U.Top, [Math]::Max(0, $n - $cap)))
@@ -1003,9 +1367,14 @@ function Draw-Selector($U, $deps) {
         $nm = if ($isSel) { "$B$(Grad $p.name ($ph + 0.2) 0.05)" } else { "$B$($p.name)$R" }
         $st = if ($U.Open[$p.Id]) { "$Ok● ouverte$R$(if ($U.Live[$p.Id]) { $U.Live[$p.Id] })" } else { "$Dm○$R" }
         $acct = Acct-Chips $p
+        if ($p.Shared -and ($i -eq $U.Top -or -not $U.View[$i - 1].Shared)) {
+            $L.Add("     $ShColor── ⇄ partagés $Dm(P publier · D copie à toi · B bibliothèques)$R $ShColor──$R")
+        }
+        $sh = if ($p.Shared) { "  $ShColor⇄ $($p.Shared)$R" } else { '' }
+        $by = if ($p.Shared -and $p.author) { "par $($p.author)$(if ($p.description) { ' · ' })" } else { '' }
         $profRows += @{ Y = $L.Count; Idx = $i }
-        $L.Add("   $mark $num $nm  $st$acct")
-        $L.Add("         $Dm$(if ($p.description) { $p.description } else { '' })$R")
+        $L.Add("   $mark $num $nm  $st$sh$acct")
+        $L.Add("         $Dm$by$(if ($p.description) { $p.description } else { '' })$R")
     }
     $above = $U.Top; $below = [Math]::Max(0, $n - ($U.Top + $cap))
     $ind = @()
@@ -1025,7 +1394,8 @@ function Draw-Selector($U, $deps) {
         $L.Add("   $bc╭─ $R$B$(PalC ($ph + 0.5))◈$R$B APERÇU$R $bc$('─' * [Math]::Max(0, $pw - 11))╮$R")
         foreach ($pl in (Preview $p ($pw - 2) 9)) { $L.Add("   $bc│$R $(Fit $pl ($pw - 2)) $bc│$R") }
         $L.Add("   $bc╰$('─' * $pw)╯$R")
-        $L.Add("   $Dm dossier$R $(Resolve-Dir $p.cwd)   $Dm session$R $(SessionName $p)")
+        $dirTxt = if (-not $p.Shared) { Resolve-Dir $p.cwd } elseif ($p.cwd) { "$($p.cwd) $Dm(O pour changer)$R" } else { "$Warn à choisir au premier lancement$R$(if ($p.cwdHint) { " $Dm(chez l'auteur : « $($p.cwdHint) »)$R" })" }
+        $L.Add("   $Dm dossier$R $dirTxt   $Dm session$R $(SessionName $p)")
     }
 
     # — pied —
@@ -1033,7 +1403,7 @@ function Draw-Selector($U, $deps) {
     if ($U.Searching) {
         $L.Add('   ' + ((Key 'tape' 'pour filtrer'), (Key '↑↓' 'choisir'), (Key 'Entrée' 'lancer'), (Key 'Échap' 'effacer') -join '   '))
     } else {
-        $L.Add('   ' + ((Key '↑↓' 'choisir'), (Key 'Entrée' 'lancer'), (Key '/' 'chercher'), (Key 'N' 'nouveau'), (Key '?' $(if ($U.Help) { 'masquer l''aide' } else { 'toutes les touches' })), (Key 'Q' 'quitter') -join '   '))
+        $L.Add('   ' + ((Key '↑↓' 'choisir'), (Key 'Entrée' 'lancer'), (Key '/' 'chercher'), (Key 'N' 'nouveau'), (Key 'P' 'partager'), (Key '?' $(if ($U.Help) { 'masquer l''aide' } else { 'toutes les touches' })), (Key 'Q' 'quitter') -join '   '))
     }
     if ($U.Msg) { $L.Add("   $($U.Msg)") }
 
@@ -1073,8 +1443,14 @@ function Show-Selector([string]$msg, [string]$selectId) {
             $U.Msg = "$Err✗ Claude Code est introuvable (commande « claude ») : installe-le avant de lancer ce profil$R"
             return $null
         }
-        $p
+        # profil partagé : dossier de travail de cette machine (demandé la 1re fois) + comptes adaptés
+        $prep = Prepare-Launch $p
+        if ($prep.Asked) { & $redraw }
+        if (-not $prep.P) { $U.Msg = $prep.Msg; return $null }
+        $prep.P
     }
+    $sharedOnly = "$Dm(profil partagé : D pour en faire ta copie modifiable, P pour republier)$R"
+    Start-BackgroundSync
 
     while ($true) {
         if ($U.Refresh -or ($U.Tick % 25) -eq 0) {
@@ -1125,13 +1501,18 @@ function Show-Selector([string]$msg, [string]$selectId) {
                 }
 
                 $armedBefore = $U.Armed; $U.Armed = ''
+                $isSh = [bool]($cur -and $cur.Shared)
+                # réordonner : seulement entre profils locaux (les partagés restent groupés en bas)
+                $canMove = { param($to) -not $U.Filter -and $n -and -not $isSh -and $to -ge 0 -and $to -lt $n -and -not $U.View[$to].Shared }
                 if ($k.Key -eq 'UpArrow' -and $shift) {
                     if ($U.Filter) { $U.Msg = "$Dm(efface la recherche pour réordonner)$R" }
-                    elseif ($n -and $U.Sel -gt 0) { Move-ProfileOrder $U.View $U.Sel ($U.Sel - 1); Reload-Profiles $U $cur.Id; $U.Msg = '' }
+                    elseif ($isSh) { $U.Msg = $sharedOnly }
+                    elseif (& $canMove ($U.Sel - 1)) { Move-ProfileOrder @($U.View | Where-Object { -not $_.Shared }) $U.Sel ($U.Sel - 1); Reload-Profiles $U $cur.Id; $U.Msg = '' }
                 }
                 elseif ($k.Key -eq 'DownArrow' -and $shift) {
                     if ($U.Filter) { $U.Msg = "$Dm(efface la recherche pour réordonner)$R" }
-                    elseif ($n -and $U.Sel -lt $n - 1) { Move-ProfileOrder $U.View $U.Sel ($U.Sel + 1); Reload-Profiles $U $cur.Id; $U.Msg = '' }
+                    elseif ($isSh) { $U.Msg = $sharedOnly }
+                    elseif (& $canMove ($U.Sel + 1)) { Move-ProfileOrder @($U.View | Where-Object { -not $_.Shared }) $U.Sel ($U.Sel + 1); Reload-Profiles $U $cur.Id; $U.Msg = '' }
                 }
                 elseif ($k.Key -eq 'UpArrow' -and $n) { $U.Sel = ($U.Sel - 1 + $n) % $n; $U.Msg = '' }
                 elseif ($k.Key -eq 'DownArrow' -and $n) { $U.Sel = ($U.Sel + 1) % $n; $U.Msg = '' }
@@ -1146,12 +1527,34 @@ function Show-Selector([string]$msg, [string]$selectId) {
                 elseif ($raw -eq '/') { $U.Searching = $true; $U.Help = $false; $U.Msg = '' }
                 elseif ($raw -eq '?') { $U.Help = -not $U.Help }
                 elseif (($raw -eq '+' -or $k.Key -eq 'Add') -and $n) {
-                    if (-not $U.Filter -and $U.Sel -gt 0) { Move-ProfileOrder $U.View $U.Sel ($U.Sel - 1); Reload-Profiles $U $cur.Id }
+                    if (& $canMove ($U.Sel - 1)) { Move-ProfileOrder @($U.View | Where-Object { -not $_.Shared }) $U.Sel ($U.Sel - 1); Reload-Profiles $U $cur.Id }
                 }
                 elseif (($raw -eq '-' -or $k.Key -eq 'Subtract') -and $n) {
-                    if (-not $U.Filter -and $U.Sel -lt $n - 1) { Move-ProfileOrder $U.View $U.Sel ($U.Sel + 1); Reload-Profiles $U $cur.Id }
+                    if (& $canMove ($U.Sel + 1)) { Move-ProfileOrder @($U.View | Where-Object { -not $_.Shared }) $U.Sel ($U.Sel + 1); Reload-Profiles $U $cur.Id }
                 }
-                elseif ($ch -eq 'r') { Reload-Profiles $U $null; $U.Msg = "$Info↻ profils rechargés$R" }
+                elseif ($ch -eq 'r') {
+                    $script:Sources = Get-Sources
+                    $errs = Sync-AllSources -Quiet
+                    Reload-Profiles $U $null
+                    $U.Msg = if ($errs.Count) { "$Err✗ $($errs -join ' · ')$R" } else { "$Info↻ profils rechargés$(if (@($Sources | Where-Object { $_.Type -eq 'git' }).Count) { ' · bibliothèques synchronisées' })$R" }
+                }
+                elseif ($ch -eq 'p' -and $n) {
+                    $res = Invoke-Publish $cur; & $redraw
+                    Reload-Profiles $U $(if ($res.Id) { $res.Id } else { $cur.Id }); $U.Msg = $res.Msg
+                }
+                elseif ($ch -eq 'b') {
+                    $res = Invoke-Sources; & $redraw
+                    Reload-Profiles $U $null; $U.Msg = $res.Msg
+                }
+                elseif ($ch -eq 'o' -and $n) {
+                    if (-not $isSh) { $U.Msg = "$Dm(O sert aux profils partagés ; pour les tiens, E pour éditer « cwd »)$R" }
+                    else {
+                        $d = Ask-SharedCwd $cur; & $redraw
+                        Reload-Profiles $U $cur.Id
+                        $U.Msg = if ($d) { "$Ok✓ dossier de « $($cur.name) » : $d$R" } else { '' }
+                    }
+                }
+                elseif ($isSh -and (($ch -eq 'e') -or ($k.Key -eq 'F2'))) { $U.Msg = $sharedOnly }
                 elseif ($ch -eq 'e' -and $n) {
                     Start-Process notepad.exe -ArgumentList "`"$($cur.File)`""
                     $U.Msg = "$Info✎ édition de $(Split-Path $cur.File -Leaf) — rechargé automatiquement à l'enregistrement$R"
@@ -1161,8 +1564,9 @@ function Show-Selector([string]$msg, [string]$selectId) {
                     Reload-Profiles $U $res.Id; $U.Msg = $res.Msg
                 }
                 elseif ($ch -eq 'd' -and $n) {
-                    $res = Invoke-Duplicate $cur
-                    Reload-Profiles $U $res.Id; $U.Msg = $res.Msg
+                    $res = if ($isSh) { Invoke-ImportShared $cur } else { Invoke-Duplicate $cur }
+                    if ($res.Asked) { & $redraw }
+                    Reload-Profiles $U $(if ($res.Id) { $res.Id } else { $cur.Id }); $U.Msg = $res.Msg
                 }
                 elseif ($k.Key -eq 'F2' -and $n) {
                     $res = Invoke-Rename $cur; & $redraw
@@ -1171,7 +1575,13 @@ function Show-Selector([string]$msg, [string]$selectId) {
                 elseif ($k.Key -eq 'Delete' -and $n) {
                     if ($armedBefore -ne "del:$($cur.Id)") {
                         $U.Armed = "del:$($cur.Id)"
-                        $U.Msg = "$Err⚠ appuie encore sur Suppr pour supprimer « $($cur.name) » (déplacé dans profiles\.corbeille)$R"
+                        $U.Msg = if ($isSh) { "$Err⚠ appuie encore sur Suppr pour retirer « $($cur.name) » de $($cur.Shared) (pour tout le monde)$R" }
+                                 else { "$Err⚠ appuie encore sur Suppr pour supprimer « $($cur.name) » (déplacé dans profiles\.corbeille)$R" }
+                    } elseif ($isSh) {
+                        $nb = if ($U.Sel + 1 -lt $n) { $U.View[$U.Sel + 1].Id } elseif ($U.Sel -gt 0) { $U.View[$U.Sel - 1].Id } else { $null }
+                        $res = Remove-Shared $cur
+                        if ($res.Undo) { $U.Undo = $res.Undo }
+                        Reload-Profiles $U $nb; $U.Msg = $res.Msg
                     } else {
                         $nb = if ($U.Sel + 1 -lt $n) { $U.View[$U.Sel + 1].Id } elseif ($U.Sel -gt 0) { $U.View[$U.Sel - 1].Id } else { $null }
                         $dest = Remove-ProfileToTrash $cur
@@ -1263,8 +1673,11 @@ try {
         return
     }
     if ($Open) {
-        $p = Get-Profiles | Where-Object { $_.Id -eq $Open -or $_.name -eq $Open } | Select-Object -First 1
-        if (-not $p) { throw "profil « $Open » introuvable dans $ProfDir" }
+        $Sources = Get-Sources
+        $p = @(Get-Profiles) + @(Get-SharedProfiles) | Where-Object { $_.Id -eq $Open -or $_.name -eq $Open } | Select-Object -First 1
+        if (-not $p) { throw "profil « $Open » introuvable dans $ProfDir ni dans les bibliothèques partagées" }
+        $p = (Prepare-Launch $p).P
+        if (-not $p) { return }
         $s = Start-FlowProfile $p
         Save-LastUsed $p.Id
         if ($NoAttach) { "session prête : $s  (psmux -L $Sock attach -t $s)"; return }
