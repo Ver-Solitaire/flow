@@ -1,0 +1,20 @@
+{
+  "accounts": [
+    {
+      "id": "principal",
+      "label": "Compte 1",
+      "short": "C1",
+      "dir": null,
+      "color": "#ff8a5c",
+      "enabled": true
+    },
+    {
+      "id": "second",
+      "label": "Compte 2",
+      "short": "C2",
+      "dir": "~/.claude-compte2",
+      "color": "#54baff",
+      "enabled": true
+    }
+  ]
+}

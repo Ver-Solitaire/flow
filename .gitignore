@@ -1,0 +1,8 @@
+# état local de FLOW (propre à chaque machine)
+config/state.json
+config/team-projects.json
+profiles/.corbeille/
+*.bak
+
+# comptes Claude : chacun a les siens ; install.cmd crée accounts.json depuis accounts.example.json
+config/accounts.json

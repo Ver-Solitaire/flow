@@ -1,0 +1,25 @@
+{
+  "name": "Duo — 2 comptes",
+  "description": "Moniteur partagé + un Claude par compte ; Bureau et terminal en dessous",
+  "order": 2,
+  "session": "flow-duo",
+  "window": "claude",
+  "cwd": "..",
+  "rows": [
+    {
+      "height": 75,
+      "panes": [
+        { "role": "monitor", "width": 30 },
+        { "role": "claude", "account": "principal", "width": 35, "args": "--teammate-mode tmux", "focus": true },
+        { "role": "claude", "account": "second", "width": 35, "args": "--teammate-mode tmux" }
+      ]
+    },
+    {
+      "height": 25,
+      "panes": [
+        { "role": "office", "width": 50 },
+        { "role": "shell", "width": 50 }
+      ]
+    }
+  ]
+}
