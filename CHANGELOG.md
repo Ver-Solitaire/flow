@@ -2,6 +2,8 @@
 
 ## Non publié
 
+**Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1.
+
 ### « À toi » bien visible
 - **Bannière animée** (`⚑ À TOI`) sur les écrans qui attendent une décision : plan à valider, résultat à valider, spécification, workflow. Elle pulse (couleur et chevrons) pendant l'attente.
 - **Alerte** à l'apparition : notification Windows (icône d'avertissement), **son** et **clignotement** de la fenêtre dans la barre des tâches ; **rappel toutes les 3 minutes** tant que rien n'est fait. Une seule alerte par situation.
