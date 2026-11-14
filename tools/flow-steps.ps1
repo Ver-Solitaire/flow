@@ -152,7 +152,7 @@ $SpecSchema
 }
 
 # ───────────────────────── exécution : appels en parallèle ─────────────────────────
-function Wait-Jobs-Spinner($jobs, [string]$label, [int]$TimeoutMin = 15) {
+function Wait-Jobs-Spinner($jobs, [string]$label, [double]$TimeoutMin = 15) {
     # attend plusieurs tâches de fond avec un indicateur ; Échap annule (renvoie $null) ; au-delà du délai, les tâches non rendues sont arrêtées ($null à leur place)
     Cls
     $t0 = Get-Date
