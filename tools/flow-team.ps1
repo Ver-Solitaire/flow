@@ -3070,10 +3070,22 @@ function Mode-Review {
         $k = (Read-KeyOrHint); $ch = "$($k.KeyChar)".ToLower()
         if ($k.Key -eq 'Escape' -or $ch -eq 'n') { return 'home' }   # retour à l'accueil de l'équipe : nouvelle demande (N) ; celle-ci reste à valider
         elseif ($ch -eq 'v') {
-            if (-not $changed.Count) { $msg = "$Warn aucun fichier produit par cette équipe$R"; continue }
             # fenêtre de lecture : le texte mis en forme est affiché dans une fenêtre psmux à part, où la molette défile
             # nativement (la molette n'est pas transmise aux écrans de FLOW) ; on se place en haut du texte
             $o = [Collections.Generic.List[string]]::new()
+            if (-not $changed.Count) {
+                # rien de nouveau dans le projet (les fichiers existaient déjà, ou l'équipe n'a rien changé) : on lit au moins les comptes-rendus
+                $o.Add("$B$Warn━━ Aucun fichier nouveau ou modifié par cette équipe ━━$R"); $o.Add('')
+                $o.Add("  Le résultat est identique à ton projet (par exemple parce qu'une livraison précédente contenait déjà ces fichiers).")
+                $o.Add("  Voici ce que chaque ouvrier a rapporté :"); $o.Add('')
+                foreach ($t in @($State.tasks)) {
+                    $o.Add("$B$Warn━━ Compte-rendu de la tâche $($t.id) : $($t.title) ━━$R"); $o.Add('')
+                    $rf = Result-File $t.id
+                    $rawc = if (Test-Path -LiteralPath $rf) { @(Get-Content -LiteralPath $rf -Encoding utf8) } else { @('(pas de compte-rendu)') }
+                    foreach ($x in (Render-Md $rawc 100)) { $o.Add("  $x") }
+                    $o.Add('')
+                }
+            }
             foreach ($cf in $changed) {
                 $p = Join-Path $iw $cf
                 $o.Add("$B$Warn━━ $cf ━━$R"); $o.Add('')
