@@ -34,7 +34,7 @@ Describe 'Bannière « À toi »' {
         }
         $all = (Get-Content (Join-Path $global:FlowRoot 'tools\flow-team.ps1') -Raw -Encoding utf8)
         $all | Should -Match "Attn 'vérifie le plan"
-        $all | Should -Match "Attn 'V = LIRE le résultat"
+        $all | Should -Match "Attn 'Entrée = VALIDER"
     }
     It 'Show-Frame repère la ligne de la bannière (pour la redessiner), et seulement elle' {
         $script:AttnRow = -1

@@ -2864,6 +2864,12 @@ function Deliver-Run([string]$dlv, [string]$target, [string]$cur) {
             } else {
                 [void](Git-In $RepoRoot @('merge', '--squash', $ib))
                 if ($GitCode -ne 0) { [void](Git-In $RepoRoot @('reset', '--merge')); return @{ Ok = $false; Info = "$Err✗ conflit en appliquant le squash : rien n'a été modifié. Fusionne $ib à la main (O).$R" } }
+                [void](Git-In $RepoRoot @('diff', '--cached', '--quiet'))
+                if ($GitCode -eq 0) {
+                    # rien à commiter : ton projet contient déjà exactement ce résultat (livraison précédente identique)
+                    $arch0 = @(Cleanup-Run)
+                    return @{ Ok = $true; Archive = $arch0; Info = "L'équipe n'a rien changé : ton projet $target contient déjà ce résultat (rien à commiter)." }
+                }
                 [void](Git-In $RepoRoot @('commit', '-q', '-m', $title, '-m', $body))
                 if ($GitCode -ne 0) { [void](Git-In $RepoRoot @('reset', '--merge')); return @{ Ok = $false; Info = "$Err✗ le commit final a échoué (hook du projet ?) : rien n'a été modifié.$R" } }
             }
@@ -3022,7 +3028,7 @@ function Mode-Review {
         $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — à valider' 0.1)   $Dm$($State.id)$R")
         $L.Add("  $B$($State.summary)$R")
         $L.Add((Stepper 5))
-        $L.Add((Attn 'V = LIRE le résultat · F = le mettre dans ton projet · N = nouvelle demande (celui-ci reste à valider)' '⚑ FLOW : le travail est prêt à valider')); $L.Add('')
+        $L.Add((Attn 'Entrée = VALIDER et mettre dans ton projet · V = lire d''abord · N = plus tard' '⚑ FLOW : le travail est prêt à valider')); $L.Add('')
         $changed = @(Changed-Files $iw $State.base)
         $merged = @($State.integration.merged); $skipped = @($State.integration.skipped)
         $L.Add("  $Dm branche d'intégration$R $ib   $Dm dossier$R $iw")
@@ -3064,7 +3070,7 @@ function Mode-Review {
             default  { "fusionner dans $target" }
         }
         $L.Add("  $Dm commit final : « $(Final-Title) »$R")
-        $L.Add((Keys @('V', 'lire le résultat', 'F', $fLabel, 'L', 'autre livraison', 'D', 'diff', 'O', 'terminal', 'J', 'jeter', 'N', 'nouvelle demande', 'Échap', 'accueil')))
+        $L.Add((Keys @('Entrée', "VALIDER : $fLabel", 'V', 'lire le résultat', 'L', 'autre livraison', 'D', 'diff', 'O', 'terminal', 'J', 'jeter', 'N', 'nouvelle demande', 'Échap', 'accueil')))
         if ($msg) { $L.Add("  $msg") }
         Show-Frame $L
         $k = (Read-KeyOrHint); $ch = "$($k.KeyChar)".ToLower()
@@ -3137,7 +3143,7 @@ function Mode-Review {
             $State.deliver = $order[([array]::IndexOf($order, $dlv) + 1) % $order.Count]; Save-State
             $msg = "$Dm livraison pour cette équipe : $(Deliver-Label $State.deliver)$R"
         }
-        elseif ($ch -eq 'f') {
+        elseif ($ch -eq 'f' -or $k.Key -eq 'Enter') {      # Entrée = valider : la façon simple
             # 1) chaque tâche dite fusionnée doit réellement être dans la branche d'intégration
             $gone = @($merged | Where-Object { $tt = Task-ById $_; [void](Git-In $RepoRoot @('merge-base', '--is-ancestor', (Task-Branch $tt), $ib)); $GitCode -ne 0 })
             if ($gone.Count) {

@@ -4,6 +4,10 @@
 
 **Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1.
 
+### Valider simplement
+- **Entrée = valider** sur l'écran de validation du travail de l'équipe (comme pour le plan et la spécification) : un seul geste, la touche F reste possible. La bannière et l'aide du bas le disent (« Entrée = VALIDER et mettre dans ton projet · V = lire d'abord »).
+- Une livraison qui ne change rien (ton projet contient déjà ce résultat) n'échoue plus avec « le commit final a échoué » : elle se termine proprement.
+
 ### Correctif : V sur un résultat sans fichier nouveau
 - **V** ne « faisait rien » quand l'équipe n'avait produit aucun fichier nouveau (par exemple parce qu'une livraison précédente les contenait déjà) : seul un petit message discret s'affichait en bas. La fenêtre de lecture s'ouvre maintenant avec une explication et **les comptes-rendus des ouvriers**.
 
