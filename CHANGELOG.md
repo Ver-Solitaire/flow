@@ -2,6 +2,8 @@
 
 ## Non publié
 
+**Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1.
+
 ### Workflow du projet (livraison 1)
 - **Un workflow par projet**, créé avec toi au premier lancement (ou par **W** dans le profil) : FLOW étudie le projet, te pose 6 à 8 questions sur ce que le code ne dit pas, écrit un brouillon, puis te le fait valider (Entrée, **E** pour modifier, **R** pour refaire avec une précision). Inspiré du workflow d'un gros projet : cahier de règles et feuille de route d'étapes.
 - **`.flow\workflow\`** : `CAHIER.md` (vision, règles décidées, interdits, données à protéger, critère de réussite mesurable), `ROADMAP.md` (tableau d'étapes et de leur état, lu et écrit par FLOW), `workflow.json`, `archives\` (rien n'est perdu quand on refait). Les commandes de vérification, les chemins protégés et les garde-fous restent dans `.flow\config.json` : une seule source.
