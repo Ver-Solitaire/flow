@@ -7,22 +7,48 @@ partage une demande, et un « Bureau » où chaque agent est un petit personnage
 ## Installation (nouvelle machine, Windows)
 
 1. Récupère le dossier (`git clone …` ou téléchargement ZIP).
-2. **Double-clique sur `install.cmd`.** Il vérifie et installe ce qui manque avec `winget` :
-   PowerShell 7, psmux, Git, Claude Code, Windows Terminal ; puis il crée `config\accounts.json`,
-   le raccourci « FLOW » sur le bureau, propose de configurer l'identité Git et de te connecter à Claude.
-   (`install.cmd -Yes` : sans questions · `install.cmd -WithGitHubCli` : ajoute GitHub CLI.)
+2. **Double-clique sur `install.cmd`.** Il fonctionne même sans PowerShell 7 : il vérifie chaque outil **et sa version**,
+   installe ou met à jour ce qui manque avec `winget`, **revérifie ensuite chaque outil lui-même** (et pas seulement le code de sortie de winget),
+   puis crée `config\accounts.json`, le raccourci « FLOW » sur le bureau, propose de configurer l'identité Git et de te connecter à Claude.
+   Il ne dit « FLOW est prêt » que si tout ce qui est obligatoire est là (code de sortie 0) ; sinon il liste ce qui manque et ce qu'il faut taper.
+   Si un outil vient d'être installé mais reste invisible, il te demande de fermer et rouvrir la fenêtre (le `PATH` a changé), puis de relancer `install.cmd`.
+   (`install.cmd -Check` : **vérifie sans rien modifier** · `install.cmd -Yes` : sans questions · `install.cmd -WithGitHubCli` : ajoute GitHub CLI.)
 3. Lance FLOW avec le raccourci du bureau. Pour découvrir sans rien risquer :
    `pwsh -File FLOW.ps1 -Demo` (Bureau et moniteur) et `pwsh -File FLOW.ps1 -TeamDemo` (fenêtre Équipe)
    et `pwsh -File FLOW.ps1 -ShareDemo` (profils partagés : deux bibliothèques, un collègue qui publie pendant la démo).
 
 Prérequis : Windows 10/11 avec `winget` (« App Installer » du Microsoft Store).
 
+### Dépendances
+
+La liste, les versions minimales et les commandes d'installation vivent à **un seul endroit** : [`dependances.json`](dependances.json)
+(lu par `install.cmd`, par `-Doctor`, par `tests\run.ps1` et par tous les messages « … est introuvable »). Ce tableau en est généré :
+`pwsh -File tools\flow-deps.ps1 -UpdateReadme` le met à jour, et un test échoue s'il diverge.
+
+<!-- DEPENDANCES:DEBUT -->
+| Outil | Nécessaire | À quoi il sert | Version minimale |
+|---|---|---|---|
+| PowerShell 7 | oui | FLOW et tous ses écrans tournent sous PowerShell 7 | 7.2 (essayé avec 7.7.0) |
+| psmux | oui | les sessions, les fenêtres et les panneaux (tmux pour Windows) | 3.4.0 (essayé avec 3.4.0) |
+| Claude Code | oui | les Claude des panneaux et de l'équipe (options --permission-mode, --add-dir, --allowedTools, --output-format, --append-system-prompt, claude auth login ; --teammate-mode des profils n'apparaît pas dans l'aide de cette version) | 2.1.318 (essayé avec 2.1.318) |
+| Git | oui | la fenêtre Équipe : une copie de travail par tâche (git worktree), fusions, livraison | 2.17 (essayé avec 2.56.0) |
+| winget | non : installation | installe les autres outils (install.cmd) | aucune (essayé avec 1.29.380) |
+| Windows Terminal | non : recommandé | couleurs et souris dans les écrans de FLOW ; déjà présent sur Windows 11 | - |
+| GitHub CLI | non : livraison par pull request | ouvrir une pull request à la livraison d'une équipe (mode « pr ») | aucune (essayé avec 2.104.0) |
+| Pester | non : développement | les tests (tests\run.ps1) | série 5 uniquement |
+| Compilateur .NET Framework (csc) | non : développement | compile FLOW.exe (sans lui, FLOW reste utilisable avec FLOW.cmd) | - |
+<!-- DEPENDANCES:FIN -->
+
+« Essayé avec » = la version utilisée pour valider FLOW ; quand aucune version plus ancienne n'a été essayée, le minimum est cette version-là (voir `min_source` dans `dependances.json`).
+Sans PowerShell 7, `FLOW.cmd`, `FLOW.exe` et un `FLOW.ps1` lancé par Windows PowerShell 5.1 disent tous la même chose : **double-clique sur `install.cmd`**.
+Sans le compilateur .NET Framework, `FLOW.exe` n'est pas compilé : FLOW reste utilisable avec `FLOW.cmd` (les raccourcis le lancent).
+
 ## Dépannage
 
-- **`pwsh -File FLOW.ps1 -Doctor`** : contrôle PowerShell 7, psmux, Claude Code, Git, les comptes (connectés ou non, adresse), les fichiers de configuration,
+- **`install.cmd -Check`** (marche sans PowerShell 7, ne modifie rien) et **`pwsh -File FLOW.ps1 -Doctor`** : contrôlent chaque outil et sa version (voir le tableau ci-dessus), puis, pour `-Doctor`, les comptes (connectés ou non, adresse), les fichiers de configuration,
   les sessions ouvertes et les dernières lignes du journal, et dit quoi faire pour chaque point en défaut.
 - **Journal** : `config\flow.log` (200 Ko au plus) : transitions des équipes, messages envoyés aux ouvriers, sauvegardes et refus.
-- **Tests** : `pwsh -File tests\run.ps1` (Pester 5 ; téléchargé dans `tests\.modules` s'il manque). Aucun test ne touche à tes sessions ni à tes comptes.
+- **Tests** : `pwsh -File tests\run.ps1` (Pester **série 5 uniquement** ; téléchargé dans `tests\.modules` s'il manque, en local comme dans la CI). Aucun test ne touche à tes sessions ni à tes comptes.
 - Un Claude d'ouvrier qui ne fait rien : ouvre son panneau (fenêtre « equipe », `Ctrl+B 2`) ; s'il attend une autorisation ou une réponse, réponds-lui là.
 - Version installée : affichée dans l'en-tête du sélecteur (fichier `VERSION`) ; historique dans `CHANGELOG.md`.
 
@@ -212,8 +238,8 @@ projet) ; la taille de la fenêtre de contexte (200k / 1M) est détectée automa
 
 ## Portabilité
 
-Sur une autre machine : copier le dossier, installer `psmux` (`winget install marlocarlo.psmux`),
-Claude Code et PowerShell 7, puis `pwsh -File FLOW.ps1 -InstallShortcut`.
+Sur une autre machine : copier le dossier, double-cliquer sur `install.cmd` (il installe et vérifie psmux, Claude Code, Git et PowerShell 7),
+puis `pwsh -File FLOW.ps1 -InstallShortcut`.
 Au lancement, FLOW branche `tools/statusline.ps1` dans `settings.json` du compte Claude utilisé
 (sauf si une barre de statut personnelle existe déjà).
 

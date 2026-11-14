@@ -2,8 +2,18 @@
 
 ## Non publié
 
-### Ajouté
-- **Mémoire de ta façon de travailler** (F8) : journal d'activité local (demandes, réponses guidées, changements de plan, retours, livraisons, usage et coût de chaque appel Claude, quota des comptes), copie des conversations des Claude avec secrets masqués, et **profil de travail** en langage naturel mis à jour à la fin de chaque équipe puis transmis aux Claude comme hypothèses. Tout reste sur le PC (`%LOCALAPPDATA%\FLOW\profil\`) ; chaque partie se coupe, et tout s'efface depuis l'écran.
+**Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1 (les versions des anciennes éditions n'ont pas été consignées).
+
+### Dépendances
+- **Une seule déclaration** : `dependances.json` (nom, commande, identifiant winget, obligatoire ou non, rôle, version minimale et son origine, version essayée). `install.cmd`, `-Doctor`, `tests\run.ps1` et tous les messages « … est introuvable » la lisent ; le tableau du README en est généré. Un test échoue si un identifiant winget est recopié ailleurs.
+- **Versions minimales contrôlées** par l'installation et le diagnostic (version trouvée, attendue, commande de mise à jour). Minimums : PowerShell 7.2 (`$PSStyle`), Git 2.17 (`git worktree remove`) ; psmux 3.4.0 et Claude Code 2.1.318 = versions essayées (aucune version plus ancienne n'a été essayée).
+- **`install.cmd -Check`** : vérifie sans rien modifier, sous Windows PowerShell 5.1.
+- **Une installation qui ne ment pas** : chaque outil est revérifié après winget (et non le seul code de sortie) ; « FLOW est prêt » n'apparaît que si tout l'obligatoire est là, code de sortie 1 sinon ; un outil installé mais encore invisible demande de rouvrir la fenêtre ; le `PATH` est complété et non plus remplacé.
+- **Sans PowerShell 7** : `FLOW.cmd`, `FLOW.exe` et `FLOW.ps1` (lancé par Windows PowerShell 5.1) disent tous « double-clique sur install.cmd » ; `FLOW.ps1` est désormais en UTF-8 avec BOM, sans quoi 5.1 le lisait en ANSI et échouait avec 123 erreurs de syntaxe.
+- **Pester borné à la série 5** : les tests tournaient en réalité sous Pester 6.2.0 (minimum sans maximum, tri des versions comme du texte) ; `tests\run.ps1` compare maintenant des versions et refuse hors série 5, en local comme dans la CI.
+- **FLOW.exe sans compilateur** : le dit, et renvoie vers `FLOW.cmd` (les raccourcis le lancent).
+
+### Ajouté- **Mémoire de ta façon de travailler** (F8) : journal d'activité local (demandes, réponses guidées, changements de plan, retours, livraisons, usage et coût de chaque appel Claude, quota des comptes), copie des conversations des Claude avec secrets masqués, et **profil de travail** en langage naturel mis à jour à la fin de chaque équipe puis transmis aux Claude comme hypothèses. Tout reste sur le PC (`%LOCALAPPDATA%\FLOW\profil\`) ; chaque partie se coupe, et tout s'efface depuis l'écran.
 
 ## 1.3.0 — 14 novembre 2026
 
