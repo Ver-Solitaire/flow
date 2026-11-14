@@ -86,11 +86,11 @@ function Invoke-DepProbe($d) {
 function Select-DepVersion {
     # la version la plus haute qui respecte min et max (comparaison de VERSIONS : 5.10 apres 5.9) ; $null s'il n'y en a pas
     param($Versions, $Dep)
-    $ok = @(@($Versions) | Where-Object {
+    $fit = @(@($Versions) | Where-Object {
             $_ -and (ConvertTo-DepVersion "$_") -and
             ((-not $Dep.min) -or (Compare-DepVersion $_ $Dep.min) -ge 0) -and ((-not $Dep.max) -or (Compare-DepVersion $_ $Dep.max) -le 0)
         } | Sort-Object { ConvertTo-DepVersion "$_" } -Descending)
-    if ($ok.Count) { return "$($ok[0])" }
+    if ($fit.Count) { return "$($fit[0])" }
     $null
 }
 

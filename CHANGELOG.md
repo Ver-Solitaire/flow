@@ -1,5 +1,14 @@
 # Journal des changements
 
+## Non publié
+
+### Workflow du projet (livraison 1)
+- **Un workflow par projet**, créé avec toi au premier lancement (ou par **W** dans le profil) : FLOW étudie le projet, te pose 6 à 8 questions sur ce que le code ne dit pas, écrit un brouillon, puis te le fait valider (Entrée, **E** pour modifier, **R** pour refaire avec une précision). Inspiré du workflow d'un gros projet : cahier de règles et feuille de route d'étapes.
+- **`.flow\workflow\`** : `CAHIER.md` (vision, règles décidées, interdits, données à protéger, critère de réussite mesurable), `ROADMAP.md` (tableau d'étapes et de leur état, lu et écrit par FLOW), `workflow.json`, `archives\` (rien n'est perdu quand on refait). Les commandes de vérification, les chemins protégés et les garde-fous restent dans `.flow\config.json` : une seule source.
+- Le cahier et l'étape en cours sont **transmis au planificateur, au guide, aux ouvriers et aux relecteurs**, seulement une fois le workflow **validé**.
+- Les interdits sont toujours écrits comme des interdits (« Ne jamais… » ou « À ne jamais faire : … ») pour ne pas être pris pour des ordres.
+- Le garde-fou contre les variables qui masquent une couleur (`$r` / `$R`) surveille maintenant aussi les modules chargés dans la fenêtre Équipe : un `$r` dans l'écran du workflow rendait l'affichage illisible sans qu'aucun test ne le voie.
+
 ## 1.4.0 — 14 novembre 2026
 
 **Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1 (les versions des anciennes éditions n'ont pas été consignées).

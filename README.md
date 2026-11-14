@@ -360,6 +360,21 @@ Pour obtenir exactement le résultat voulu, **FLOW te pose des questions à chaq
 
 Pour chaque question : **↑↓ ou 1-4** pour choisir (ou clic), **Entrée** pour valider, **T** pour répondre avec tes mots, **S** pour dire « décide à ma place » (la recommandation est prise), **←** pour revenir à la question précédente, **Échap** pour passer les questions. Tes réponses sont dans `precisions.md` de l'équipe et dans son brief : tous les Claude les voient. Le lancement automatique du plan est désactivé en mode guidé.
 
+### Workflow du projet (W dans le profil, proposé au premier lancement)
+
+Pour un gros projet, FLOW crée avec toi une **méthode de travail écrite**, dans `.flow\workflow\` (commitable, partagée avec le projet) :
+
+| Fichier | Contenu |
+|---|---|
+| `CAHIER.md` | vision, public, **règles décidées** (ne se remettent pas en cause sans toi), interdits, contraintes, données à protéger, **critère de réussite mesurable**, comment vérifier en vrai, questions ouvertes |
+| `ROADMAP.md` | les **étapes** du projet : identifiant, titre, but, documents à lire, passe (légère ou complète) et état (à faire, conception, en cours, fait, bloquée). Un tableau Markdown : tu peux le modifier à la main, FLOW le relit et signale toute ligne illisible |
+| `workflow.json` | version, date, « validé » |
+| `archives\` | les versions remplacées quand tu refais le workflow |
+
+**Création** : FLOW étudie le projet en lecture seule, te pose 6 à 8 questions (objectif et public, réussite mesurable, étapes, contraintes, ce qu'il ne faut jamais toucher, comment vérifier en vrai, décisions déjà prises), écrit un brouillon et te le montre. **Entrée** valide, **E** ouvre les fichiers dans le Bloc-notes, **R** refait avec ta précision, **Échap** garde un brouillon. Tant que le workflow n'est pas validé, rien n'est transmis aux Claude.
+
+Une fois validé, le cahier et l'étape en cours sont ajoutés aux consignes du planificateur, du guide, des ouvriers et des relecteurs. Les données à protéger et les interdits sont aussi inscrits dans `.flow\config.json` (`protectedPaths`, `guardrails`) : c'est là qu'ils sont lus. La suite (passe de conception puis de construction par étape, enchaînement, tri des contradictions) est prévue par livraisons.
+
 ### Mémoire de ta façon de travailler (F8)
 
 FLOW apprend **comment tu travailles** et en garde une mémoire **locale**, pour que les prochains Claude t'aident mieux sans te redemander ce que tu as déjà montré. Rien n'est envoyé ailleurs : tout est dans `%LOCALAPPDATA%\FLOW\profil\`, hors de tes projets et de Git.

@@ -138,6 +138,7 @@ $GitExe = Find-Git
 . (Join-Path $PSScriptRoot 'flow-claudemd.ps1')  # création d'un CLAUDE.md de départ
 . (Join-Path $PSScriptRoot 'flow-profile.ps1')  # mémoire locale de la façon de travailler de l'utilisateur
 . (Join-Path $PSScriptRoot 'flow-deps.ps1')     # dépendances : une seule liste (dependances.json)
+. (Join-Path $PSScriptRoot 'flow-workflow.ps1') # workflow du projet : cahier, feuille de route (.flow\workflow\)
 $global:FlowLogFile = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\config\flow.log'))
 $GitId = @()
 $GitCode = 0
@@ -446,6 +447,8 @@ function Mode-Profile {
         $L.Add("  $B Vérifications$R")
         if (@($Cfg.checks).Count) { foreach ($c in @($Cfg.checks)) { $L.Add("     $Teal•$R $($c.name) $Dm→$R $($c.cmd)") } }
         else { $L.Add("     $Dm(aucune détectée — A pour demander à Claude, E pour les écrire)$R") }
+        $wfState = if (Wf-Validated) { "$Ok✓ validé$R $Dm(.flow\workflow\ : cahier et feuille de route)$R" } elseif (Wf-Exists) { "$Warn brouillon non validé$R $Dm(W pour le reprendre)$R" } else { "$Dm aucun — W pour le créer avec Claude (conseillé pour un gros projet)$R" }
+        $L.Add("  $B Workflow$R               $wfState")
         $L.Add("  $B Branches$R               $($Cfg.branchPrefix)<équipe>-<tâche>")
         $L.Add("  $B Commits$R                $(if ($Cfg.commitStyle -eq 'conventional') { 'Conventional Commits (feat:, fix:…)' } else { 'style libre, comme l''historique' })")
         $L.Add("  $B Livraison$R              $(Deliver-Label $Cfg.deliver)$(if ($Cfg.targetBranch) { " $Dm→ $($Cfg.targetBranch)$R" } else { " $Dm→ branche actuelle$R" })")
@@ -460,7 +463,7 @@ function Mode-Profile {
             $L.Add(''); $L.Add("  $Dm ℹ pas de mémoire du projet (dossier memoire\) : G pour la créer ; après chaque travail, un « scribe » la met à jour.$R")
         }
         $L.Add('')
-        $L.Add((Keys @('Entrée', 'valider', 'A', 'affiner avec Claude', 'L', 'mode de livraison', 'E', 'modifier (JSON)', 'D', 'redétecter', 'G', 'créer CLAUDE.md + mémoire', 'Échap', 'retour')))
+        $L.Add((Keys @('Entrée', 'valider', 'A', 'affiner avec Claude', 'L', 'mode de livraison', 'E', 'modifier (JSON)', 'D', 'redétecter', 'G', 'créer CLAUDE.md + mémoire', 'W', 'workflow du projet', 'Échap', 'retour')))
         $L.Add("  $Dm Enregistré dans .flow\config.json : tu peux le commiter pour le partager avec le projet.$R")
         if ($msg) { $L.Add("  $msg") }
         Show-Frame $L
@@ -472,6 +475,16 @@ function Mode-Profile {
             $mem = @(New-ProjectMemory $RepoRoot)
             $msg = if ($f) { "$Ok✓ CLAUDE.md et mémoire du projet (memoire\) créés : à relire, compléter et commiter$R" } elseif ($mem.Count) { "$Ok✓ mémoire du projet créée (memoire\, $($mem.Count) fichier(s)) : à commiter pour que l'équipe la tienne à jour$R" } else { "$Dm CLAUDE.md et mémoire existent déjà$R" }
             if ($f) { Write-FlowLog "CLAUDE.md créé dans $RepoRoot" }
+        }
+        elseif ($ch -eq 'w') {
+            $redo = Wf-Exists
+            if ($redo) {
+                $k2 = Message-Screen '⚑ WORKFLOW — le refaire ?' @("Un workflow existe déjà ($(if (Wf-Validated) { 'validé' } else { 'brouillon' })).", "L'ancien est gardé dans .flow\workflow\archives\ : rien n'est perdu.") @('R', 'refaire', 'Échap', 'retour')
+                if ("$($k2.KeyChar)".ToLower() -ne 'r') { Cls; continue }
+            }
+            Save-ProjectConfig
+            $msg = Invoke-WorkflowCreation -Redo:$redo
+            Cls
         }
         elseif ($ch -eq 'a') { $msg = Refine-WithClaude; Cls }
         elseif ($ch -eq 'd') { $keep = $Cfg.instructions; $script:Cfg = Detect-Project; $Cfg.instructions = $keep; $msg = "$Info↻ profil redétecté$R" }
@@ -546,6 +559,7 @@ function Planner-Prompt([string]$request, [string]$extra) {
     $n = @(Usable-Accounts).Count
     $more = if ($extra) { "`nPRÉCISION DE L'UTILISATEUR SUR LE PLAN PRÉCÉDENT :`n$extra`n" } else { '' }
     $more += (Profile-Block)
+    $more += (Cahier-Block)
     if ("$($State.precisions)".Trim()) { $more += "`nRÉPONSES DE L'UTILISATEUR À TES QUESTIONS (elles font foi : respecte-les dans le brief et les tâches) :`n$($State.precisions)`n" }
     if ($State.guided) { $more += "`nMODE GUIDÉ : l'utilisateur veut décider des choix importants. Dans « questions » (0 à 5), liste les VRAIES décisions de conception encore ouvertes après ses réponses (même format que ci-dessous, la réponse recommandée en premier) ; dans le plan, prends l'option recommandée. Liste vide si tout est tranché.`n" }
     @"
@@ -653,6 +667,7 @@ function Valid-Questions($raw) { @(@($raw) | Where-Object { $_ -and "$($_.questi
 function Questioner-Prompt([int]$round) {
     $prev = if ("$($State.precisions)".Trim()) { "`nRÉPONSES DÉJÀ DONNÉES PAR L'UTILISATEUR :`n$($State.precisions)`n" } else { '' }
     $prev += (Profile-Block)
+    $prev += (Cahier-Block)
     $howMany = if ($round -le 1) { 'entre 4 et 8 questions' } else { 'au plus 4 questions, SEULEMENT celles qui restent vraiment ouvertes après ses réponses (renvoie une liste vide s''il n''en reste aucune)' }
     @"
 Tu es le GUIDE d'une équipe de Claude. Avant de découper le travail, tu aides l'utilisateur à préciser COMMENT parvenir au résultat
@@ -962,7 +977,7 @@ function Parse-ClaudeJson([string]$out) {
     $null
 }
 
-function Start-ClaudeJob([string]$cwd, $acct, [string]$promptFile, [string]$model, [string]$tools) {
+function Start-ClaudeJob([string]$cwd, $acct, [string]$promptFile, [string]$model, [string]$tools, [string]$addDir = $RunDir) {
     # Claude en mode non interactif dans $cwd, sur le compte donné ; la consigne est dans un fichier
     $msg = "Lis le fichier $promptFile et suis exactement ses instructions. Ta réponse finale doit être uniquement l'objet JSON demandé."
     Start-Job -ScriptBlock {
@@ -973,7 +988,7 @@ function Start-ClaudeJob([string]$cwd, $acct, [string]$promptFile, [string]$mode
         $more = if ($runDir) { @('--add-dir', $runDir) } else { @() }
         $out = & claude -p $msg --model $model --output-format json --allowedTools $tools @more 2>&1 | Out-String
         [pscustomobject]@{ Code = $LASTEXITCODE; Out = $out }
-    } -ArgumentList $cwd, $acct.Dir, $msg, $RunDir, $model, $tools
+    } -ArgumentList $cwd, $acct.Dir, $msg, $addDir, $model, $tools
 }
 
 function Worker-Prompt($t) {
@@ -1034,7 +1049,7 @@ complexe que prévu : écris ta question dans $(Help-File $t.id) (le contexte, c
 puis attends. Le conseiller étudie ton travail et répond dans $(Advice-File $t.id) ; tu recevras un message ici.
 L'utilisateur peut aussi t'écrire directement dans ce panneau.
 $conv
-$(Guardrails-Text)$(Profile-Block)
+$(Guardrails-Text)$(Profile-Block)$(Cahier-Block)
 "@
 }
 
@@ -1415,6 +1430,20 @@ function Mode-Project {
 }
 
 function Mode-Home {
+    if (Workflow-Offer-Due) {
+        $global:FlowWfOffered = $true
+        $k = Message-Screen '⚑ WORKFLOW — une méthode de travail pour ce projet' @(
+            "FLOW peut créer, avec toi, le workflow de « $(Split-Path $RepoRoot -Leaf) » :", '',
+            '  • un cahier : vision, règles décidées, interdits, données à protéger, critère de réussite',
+            '  • une feuille de route : les grandes étapes du projet et leur état',
+            '  • il est transmis à chaque Claude et tenu à jour', '',
+            "$Dm Environ 3 minutes : FLOW étudie le projet, puis te pose quelques questions. Rien ne s'applique sans ta validation.$R",
+            "$Dm Conseillé pour un gros projet ; inutile pour une petite demande isolée.$R") @('Entrée', 'créer maintenant', 'S', 'plus tard', 'N', 'ne plus proposer pour ce projet')
+        $c0 = "$($k.KeyChar)".ToLower()
+        if ($k.Key -eq 'Enter') { $m0 = Invoke-WorkflowCreation; [void](Message-Screen '⚑ WORKFLOW' @($m0) @('Entrée', 'continuer')) }
+        elseif ($c0 -eq 'n' -and $Cfg) { $Cfg | Add-Member -NotePropertyName workflowDeclined -NotePropertyValue $true -Force; Save-ProjectConfig }
+        Cls
+    }
     $runs = Open-Runs
     if ($runs.Count -and -not $global:FlowPrefill) {
         $i = 0
@@ -1908,7 +1937,7 @@ Ne signale ni le style ni les préférences personnelles. Si le travail est bon,
 pour en trouver. Un problème = un endroit précis, un SCÉNARIO concret (situation ou entrée → ce qui se passe de mal ;
 sans scénario, ne le signale pas) et la correction que tu proposes. Un autre Claude essaiera ensuite de réfuter chaque
 problème : signale seulement ce dont tu es sûr après avoir lu le code.
-$(Guardrails-Text)
+$(Guardrails-Text)$(Cahier-Block)
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ni après :
 { "verdict": "ok" ou "changes",
   "summary": "ton avis en deux phrases",
