@@ -51,6 +51,7 @@ Sans le compilateur .NET Framework, `FLOW.exe` n'est pas compilé : FLOW reste u
 - **Tests** : `pwsh -File tests\run.ps1` (Pester **série 5 uniquement** ; téléchargé dans `tests\.modules` s'il manque, en local comme dans la CI). Aucun test ne touche à tes sessions ni à tes comptes.
 - Un Claude d'ouvrier qui ne fait rien : ouvre son panneau (fenêtre « equipe », `Ctrl+B 2`) ; s'il attend une autorisation ou une réponse, réponds-lui là.
 - Version installée : affichée dans l'en-tête du sélecteur (fichier `VERSION`) ; historique dans `CHANGELOG.md`.
+- Architecture : [`docs/MODELE-OSI.md`](docs/MODELE-OSI.md) projette les échanges de FLOW sur les 7 couches du modèle OSI (avec, en annexe, ses couches logicielles internes).
 
 ## Lancer
 
