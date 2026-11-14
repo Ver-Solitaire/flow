@@ -3,6 +3,7 @@
 ## 1.1.0 — 13 novembre 2026
 
 ### Ajouté
+- **Session obsolète détectée** : une session ouverte avec un ancien profil (ou avant l'ajout d'un compte) est comparée au profil actuel ; FLOW propose de la garder ou de la reconstruire.
 - **Échap ne ferme jamais rien** : dans la fenêtre Équipe il revient d'un niveau (à l'accueil il ne fait rien) ; dans le plan il ne détruit plus le plan (X pour l'abandonner) ; dans le sélecteur, Q quitte.
 - **Fil d'étapes et ligne « À toi »** sur chaque écran de l'Équipe ; **V** lit le résultat dans une fenêtre où la molette défile.
 - **Connexion des comptes au lancement** : un profil à plusieurs comptes propose de connecter ceux qui manquent, dans la même fenêtre ; ajout de comptes à volonté (touche C).

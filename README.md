@@ -70,6 +70,9 @@ pwsh -File FLOW.ps1 -InstallShortcut      # compile FLOW.exe et (re)crée les ra
 | ? | afficher toutes les touches |
 | Q | quitter (Échap ne ferme jamais rien : il efface la recherche ou l'aide) |
 
+> **Session déjà ouverte avec un ancien profil ?** FLOW le détecte au lancement et propose « Garder la session » ou « Reconstruire (ferme la session actuelle) ».
+
+
 Le sélecteur se place sur le dernier profil lancé (`config\state.json`).
 
 ### Réorganiser les panneaux
