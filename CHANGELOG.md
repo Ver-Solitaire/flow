@@ -4,6 +4,9 @@
 
 **Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1.
 
+### Banc de mesure de la qualité
+- `pwsh -File tools\flow-bench.ps1 -Live` : 3 petites tâches fixes (`bench\taches.json`) confiées à un vrai Claude dans une copie jetable ; FLOW compte les vérifications automatiques réussies, le coût et la durée, et ajoute une ligne à `bench\resultats.jsonl`. Sans `-Live` : résumé des dernières mesures, avec les régressions signalées (▼). Coûte quelques centimes par tâche ; jamais lancé par les tests.
+
 ### Réglages d'équipe et parcours débutant (livraison 6)
 - **Réglage d'équipe par passe** (`workflow.json`, clé `equipe`) : une étape « complète » est relue par un autre compte avant la fusion, une « légère » va plus vite sans relecture. **T** dans la feuille de route (F9) bascule le réglage de la passe de l'étape choisie ; il s'applique aux équipes liées à une étape.
 - **Mode guidé activé par défaut** (public débutant) ; F7 le coupe, ton choix est retenu.

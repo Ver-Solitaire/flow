@@ -1,0 +1,36 @@
+{
+  "taches": [
+    {
+      "id": "corriger-bug",
+      "demande": "La fonction Add-Numbers de calc.ps1 donne un mauvais résultat (Add-Numbers 2 3 doit donner 5). Corrige-la.",
+      "fichiers": { "calc.ps1": "function Add-Numbers([int]$a, [int]$b) { return $a - $b }\n" },
+      "verifications": [
+        { "nom": "2+3 = 5", "script": ". ./calc.ps1; if ((Add-Numbers 2 3) -ne 5) { exit 1 }" },
+        { "nom": "-1+1 = 0", "script": ". ./calc.ps1; if ((Add-Numbers -1 1) -ne 0) { exit 1 }" }
+      ]
+    },
+    {
+      "id": "ajouter-fonction",
+      "demande": "Ajoute dans calc.ps1 une fonction Get-Average qui prend un tableau de nombres et renvoie leur moyenne ; un tableau vide renvoie 0.",
+      "fichiers": { "calc.ps1": "function Add-Numbers([int]$a, [int]$b) { return $a + $b }\n" },
+      "verifications": [
+        { "nom": "moyenne de 2,4,6 = 4", "script": ". ./calc.ps1; if ((Get-Average @(2,4,6)) -ne 4) { exit 1 }" },
+        { "nom": "tableau vide = 0", "script": ". ./calc.ps1; if ((Get-Average @()) -ne 0) { exit 1 }" },
+        { "nom": "Add-Numbers toujours là", "script": ". ./calc.ps1; if ((Add-Numbers 1 1) -ne 2) { exit 1 }" }
+      ]
+    },
+    {
+      "id": "renommer",
+      "demande": "Renomme la fonction Get-Total en Get-Sum partout dans le projet (définition et appels), sans casser le fonctionnement.",
+      "fichiers": {
+        "lib.ps1": "function Get-Total([int[]]$n) { ($n | Measure-Object -Sum).Sum }\n",
+        "main.ps1": ". ./lib.ps1\nWrite-Output (Get-Total @(1,2,3))\n"
+      },
+      "verifications": [
+        { "nom": "main.ps1 affiche 6", "script": "$r = ./main.ps1; if ($r -ne 6) { exit 1 }" },
+        { "nom": "plus aucun Get-Total", "script": "if (Select-String -Path *.ps1 -Pattern 'Get-Total' -Quiet) { exit 1 }" },
+        { "nom": "Get-Sum défini", "script": "if (-not (Select-String -Path lib.ps1 -Pattern 'function Get-Sum' -Quiet)) { exit 1 }" }
+      ]
+    }
+  ]
+}

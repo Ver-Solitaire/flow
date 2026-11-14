@@ -31,3 +31,6 @@ config/team-prefs.json
 
 # installateur compilé
 installer/sortie/
+
+# mesures du banc de qualité (propres à chaque machine)
+bench/resultats.jsonl
