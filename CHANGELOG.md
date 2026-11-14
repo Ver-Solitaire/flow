@@ -1,6 +1,6 @@
 # Journal des changements
 
-## Non publié
+## 1.4.0 — 14 novembre 2026
 
 **Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1 (les versions des anciennes éditions n'ont pas été consignées).
 
