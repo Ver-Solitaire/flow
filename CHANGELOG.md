@@ -1,6 +1,6 @@
 # Journal des changements
 
-## Non publié
+## 1.2.0 — 14 novembre 2026
 
 ### Ajouté
 - **Passe légère ou complète** choisie par le planificateur (P pour changer) : la complète fait relire sur 5 angles, contre-vérifier chaque problème grave et juger le résultat.
