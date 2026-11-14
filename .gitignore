@@ -28,3 +28,6 @@ tests/.modules/
 config/claudemd-refuse.json
 
 config/team-prefs.json
+
+# installateur compilé
+installer/sortie/
