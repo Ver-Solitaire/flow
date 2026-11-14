@@ -4,6 +4,11 @@
 
 **Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1.
 
+### Réglages d'équipe et parcours débutant (livraison 6)
+- **Réglage d'équipe par passe** (`workflow.json`, clé `equipe`) : une étape « complète » est relue par un autre compte avant la fusion, une « légère » va plus vite sans relecture. **T** dans la feuille de route (F9) bascule le réglage de la passe de l'étape choisie ; il s'applique aux équipes liées à une étape.
+- **Mode guidé activé par défaut** (public débutant) ; F7 le coupe, ton choix est retenu.
+- **Écran de départ** : « Que veux-tu obtenir ? Écris-le avec tes mots » ; FLOW pose ses questions, découpe, répartit et montre le plan avant de partir.
+
 ### Tri du projet (livraison 5) — F10
 - **Écran de tri (F10)** : FLOW examine la mémoire (`memoire\`), `CLAUDE.md`, le cahier, la feuille de route et les skills des comptes, et liste ce qui n'est pas sain : **références mortes** (fichier cité qui n'existe plus), **doublons** (identiques ou à 85 % des mots), **INDEX** incomplet ou avec liens morts, **fiches anciennes ou trop longues**, **cahier ≠ profil** (données protégées), **skills** en double, sans description, qui se chevauchent ou pas à jour, **conflits** notés par le scribe, candidats des hooks en retard.
 - **Contradictions (C)** : Claude compare les affirmations deux à deux et propose les paires incompatibles ; un numéro inventé est écarté.

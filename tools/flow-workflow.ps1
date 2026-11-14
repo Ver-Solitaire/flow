@@ -258,7 +258,34 @@ function Save-WfMeta([bool]$validated) {
     $old = Wf-Meta
     $o = [ordered]@{ version = 1; created = $(if ($old -and $old.created) { $old.created } else { (Get-Date).ToString('o') }); validated = $validated }
     if ($validated) { $o['validatedAt'] = (Get-Date).ToString('o') }
+    if ($old -and $old.equipe) { $o['equipe'] = $old.equipe }      # les réglages d'équipe survivent à une nouvelle validation
     Write-JsonAtomic $o (Wf-File 'workflow.json')
+}
+
+# ───────────────────────── réglages d'équipe par passe ─────────────────────────
+# workflow.json : "equipe": { "legere": { "relecture": false }, "complete": { "relecture": true } }
+# Une étape « complète » est relue par un autre compte avant la fusion ; une étape « légère » va plus vite, sans relecture.
+function Wf-PassKey([string]$passe) { if ("$passe" -eq 'légère') { 'legere' } else { 'complete' } }
+function Wf-Relecture([string]$passe) {
+    # la relecture croisée voulue pour cette passe (réglage du projet, sinon : complète oui, légère non)
+    $m = Wf-Meta; $key = Wf-PassKey $passe
+    if ($m -and $m.equipe -and $m.equipe.$key -and $null -ne $m.equipe.$key.relecture) { return [bool]$m.equipe.$key.relecture }
+    $key -eq 'complete'
+}
+function Set-WfRelecture([string]$passe, [bool]$on) {
+    $m = Wf-Meta; if (-not $m) { return $false }
+    $eq = [ordered]@{ legere = [ordered]@{ relecture = (Wf-Relecture 'légère') }; complete = [ordered]@{ relecture = (Wf-Relecture 'complète') } }
+    $eq[(Wf-PassKey $passe)]['relecture'] = $on
+    $o = [ordered]@{}; foreach ($p in $m.PSObject.Properties) { if ($p.Name -ne 'equipe') { $o[$p.Name] = $p.Value } }
+    $o['equipe'] = $eq
+    Write-JsonAtomic $o (Wf-File 'workflow.json'); $true
+}
+function Step-Relecture([string]$id) {
+    # relecture croisée d'une équipe liée à l'étape $id ; $null si l'étape est inconnue (le réglage habituel s'applique)
+    if (-not (Wf-Validated)) { return $null }
+    $s = @((Read-Roadmap).Steps) | Where-Object { $_.id -ieq $id } | Select-Object -First 1
+    if (-not $s) { return $null }
+    Wf-Relecture $s.passe
 }
 
 function Show-WorkflowDraft([string]$msg) {
@@ -479,7 +506,8 @@ function Mode-Roadmap {
             foreach ($j in @(Get-Content -LiteralPath $jf -Encoding utf8 -Tail 5)) { $L.Add("    $Dm$(Fit $j ($W - 8))$R") }
         }
         $L.Add('')
-        $L.Add((Keys @('↑↓', 'choisir', 'L', 'lancer l''étape', 'S', 'état', 'P', 'passe', 'E', 'modifier', 'J', 'journal', 'Échap', 'retour')))
+        if ($steps.Count) { $L.Add("  $Dm Réglage d'équipe — passe $($steps[$sel].passe) : relecture croisée $(if (Wf-Relecture $steps[$sel].passe) { 'activée' } else { 'désactivée' }) (T pour changer, vaut pour toutes les étapes de cette passe)$R") }
+        $L.Add((Keys @('↑↓', 'choisir', 'L', 'lancer l''étape', 'S', 'état', 'P', 'passe', 'T', 'relecture', 'E', 'modifier', 'J', 'journal', 'Échap', 'retour')))
         if ($msg) { $L.Add("  $msg") }
         Show-Frame $L
         foreach ($rw in $rows) { Add-Zone $rw.Y $rw.Y 0 999 @{ Row = $rw.Row } }
@@ -498,6 +526,10 @@ function Mode-Roadmap {
         elseif ($ch -eq 'p' -and $steps.Count) {
             $to = Next-In $WfPasses $steps[$sel].passe
             $msg = if (Set-StepPass $steps[$sel].id $to) { "$Ok✓ $($steps[$sel].id) : passe $to$R" } else { "$Err✗ ROADMAP.md est à corriger d'abord (E)$R" }
+        }
+        elseif ($ch -eq 't' -and $steps.Count) {
+            $pp = $steps[$sel].passe; $to = -not (Wf-Relecture $pp)
+            if (Set-WfRelecture $pp $to) { Wf-Journal "réglage d'équipe : relecture croisée $(if ($to) { 'activée' } else { 'désactivée' }) pour la passe $pp"; $msg = "$Ok✓ passe $pp : relecture croisée $(if ($to) { 'activée' } else { 'désactivée' })$R" }
         }
         elseif (($ch -eq 'l' -or $k.Key -eq 'Enter') -and $steps.Count) {
             $next = Invoke-StepLaunch $steps[$sel].id

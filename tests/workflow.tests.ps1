@@ -406,3 +406,54 @@ Describe 'Feuille de route vivante' {
         Mode-Roadmap | Should -Be 'quit'
     }
 }
+Describe 'Réglages d''équipe par passe' {
+    BeforeAll {
+        function Read-Action { param([switch]$Wait, [int]$TimeoutMs = 0, [switch]$Wheel) @{ K = (Read-KeyOrHint) } }
+        function Open-Runs { @() }
+        function New-Wf([string[]]$Passes = @('complète', 'légère')) {
+            [void](New-Project)
+            New-Item -ItemType Directory -Force (Wf-Dir) | Out-Null
+            Set-Content (Wf-File 'CAHIER.md') "# Cahier`n## Vision`nUne API." -Encoding utf8
+            $i = 0
+            Write-Roadmap @($Passes | ForEach-Object { $i++; [pscustomobject]@{ id = "E$i"; titre = "Étape $i"; but = "But $i"; documents = @(); passe = $_; etat = 'à faire' } })
+            Save-WfMeta $true
+        }
+    }
+    It 'par défaut : une passe complète est relue par un autre compte, une légère non' {
+        New-Wf
+        Wf-Relecture 'complète' | Should -BeTrue
+        Wf-Relecture 'légère' | Should -BeFalse
+        Step-Relecture 'E1' | Should -BeTrue
+        Step-Relecture 'E2' | Should -BeFalse
+        Step-Relecture 'E9' | Should -BeNullOrEmpty
+    }
+    It 'le réglage est gardé dans workflow.json, par passe, et survit à une nouvelle validation' {
+        New-Wf
+        Set-WfRelecture 'légère' $true | Should -BeTrue
+        Wf-Relecture 'légère' | Should -BeTrue
+        Wf-Relecture 'complète' | Should -BeTrue
+        Save-WfMeta $true
+        Wf-Relecture 'légère' | Should -BeTrue
+        Set-WfRelecture 'complète' $false | Out-Null
+        Wf-Relecture 'complète' | Should -BeFalse
+        (Wf-Meta).validated | Should -BeTrue
+    }
+    It 'le mode guidé est activé par défaut (public débutant) tant que l''utilisateur ne l''a pas coupé' {
+        $global:GuidedPrefFile = Join-Path $global:Base 'absent.json'
+        (Get-Prefs).guided | Should -BeTrue
+        Set-Content $global:GuidedPrefFile '{"guided":false}'
+        (Get-Prefs).guided | Should -BeFalse
+        $global:GuidedPrefFile = Join-Path $global:Base 'team-prefs.json'
+    }
+    It 'sans workflow validé : aucun réglage imposé' {
+        [void](New-Project)
+        Step-Relecture 'E1' | Should -BeNullOrEmpty
+    }
+    It 'T dans la feuille de route bascule la relecture de la passe de l''étape choisie et le journal le dit' {
+        New-Wf
+        $global:KeyQ.Enqueue('t'); $global:KeyQ.Enqueue('esc')
+        [void](Mode-Roadmap)
+        Wf-Relecture 'complète' | Should -BeFalse
+        (Get-Content (Wf-File 'journal.md') -Raw -Encoding utf8) | Should -Match 'relecture croisée désactivée pour la passe complète'
+    }
+}

@@ -16,7 +16,7 @@ function Profile-Off {
 }
 
 function Get-Prefs {
-    $d = [ordered]@{ guided = $false; collecte = $true; conversations = $true; profil = $true }
+    $d = [ordered]@{ guided = $true; collecte = $true; conversations = $true; profil = $true }
     try {
         if ($GuidedPrefFile -and (Test-Path -LiteralPath $GuidedPrefFile)) {
             $j = Get-Content -LiteralPath $GuidedPrefFile -Raw -Encoding utf8 | ConvertFrom-Json

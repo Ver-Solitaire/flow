@@ -1222,7 +1222,7 @@ function Read-Prompt([string]$initial) {
         $W = [Math]::Max(40, (ConW) - 1); $H = ConH
         $L = [Collections.Generic.List[string]]::new()
         $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — nouvelle demande' 0.1)   $B$(Split-Path $RepoRoot -Leaf)$R  $Dm$RepoRoot$R")
-        $L.Add((Stepper 1)); $L.Add((Now 'décris ce que tu veux, puis appuie sur F5 pour l''envoyer'))
+        $L.Add((Stepper 1)); $L.Add((Now 'Que veux-tu obtenir ? Écris-le avec tes mots, puis F5 pour l''envoyer'))
         $rm = Roadmap-Summary
         if ($rm) { $L.Add("  $Teal▦ Feuille de route : $rm$R $Dm· F9 pour la voir$R") }
         $L.Add("  $(Accounts-Line)")
@@ -1234,8 +1234,8 @@ function Read-Prompt([string]$initial) {
         $L.Add("  $(if ($global:FlowGuided) { "$B$Teal✦ Mode guidé : activé$R $Dm— FLOW te posera des questions avant le plan, au plan, pendant le travail et à la validation · F7 pour le désactiver$R" } else { "$Dm Mode guidé : désactivé — F7 pour que FLOW te pose des questions à chaque étape$R" })")
         $L.Add("  $Dm workflow : $(if ($Cfg.setup) { "préparation « $($Cfg.setup) » · " })vérifs : $(if ($chk) { $chk } else { 'aucune' }) · livraison : $($Cfg.deliver)$R")
         $L.Add('')
-        $L.Add("  $Dm Décris ce que tu veux : un planificateur va découper la demande en tâches, réparties$R")
-        $L.Add("  $Dm sur les comptes Claude (chacun dans sa copie du projet). Tu valideras le plan avant le départ.$R")
+        $L.Add("  $Dm Pas besoin d'être précis : FLOW te posera des questions si besoin, découpera le travail,$R")
+        $L.Add("  $Dm le répartira sur tes comptes Claude et te montrera le plan avant de partir.$R")
         $L.Add('')
         $txt = @(); foreach ($ln in $lines) { $txt += @(Chunks $ln ($W - 6)) }
         if (-not $txt.Count) { $txt = @('') }
@@ -1561,6 +1561,7 @@ function Start-Run {
         summary = ''; brief = ''; planner = ''; depth = 'full'; guided = [bool]$global:FlowGuided; precisions = ''; step = $StepId; specPath = ''; depthFixed = $Depth; tasks = @(); crossReview = (-not $NoReview)
         integration = [pscustomobject]@{ merged = @(); skipped = @(); conflict = ''; tests = $null; checks = @(); delivered = '' }
     }
+    if ($StepId) { $rv = Step-Relecture $StepId; if ($null -ne $rv) { $st.crossReview = [bool]$rv } }     # réglage d'équipe de la passe de l'étape
     Use-Run $st
     New-Item -ItemType Directory -Force $RunDir | Out-Null
     Set-Content -LiteralPath (Join-Path $RunDir 'demande.md') $req -Encoding utf8
