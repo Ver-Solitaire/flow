@@ -51,7 +51,9 @@ BeforeAll {
             tasks = @($tasks)
             integration = [pscustomobject]@{ merged = @(); skipped = @(); conflict = ''; tests = $null; checks = @(); delivered = '' }
         }
-        $global:Cfg = [pscustomobject]@{ checks = @(); setup = $null; commitStyle = 'libre' }
+        # une copie de $Cfg dans une portée intermédiaire masquerait $global:Cfg (selon la version de Pester ou de PowerShell) : on les retire toutes, puis on crée la bonne
+        for ($sc = 1; $sc -le 12; $sc++) { try { Remove-Variable -Name Cfg -Scope $sc -ErrorAction Stop } catch [System.Management.Automation.ItemNotFoundException] { continue } catch { break } }
+        $global:Cfg = [pscustomobject]@{ checks = @(); setup = $null; commitStyle = 'libre'; protectedPaths = @(); guardrails = @() }
         $global:Psmux = $false
         $global:RevJobs = @{}
         $global:Sent = @()
@@ -107,8 +109,8 @@ Describe 'Passe légère ou complète' {
 Describe 'Garde-fous transmis à chaque Claude' {
     It 'ouvriers, relecteurs et intégrateur les reçoivent, avec les règles propres au projet' {
         [void](New-Fixture 'A')
-        $global:Cfg | Add-Member protectedPaths @('data/reel') -Force
-        $global:Cfg | Add-Member guardrails @('Ne jamais toucher à la base de production.') -Force
+        $global:Cfg.protectedPaths = @('data/reel')
+        $global:Cfg.guardrails = @('Ne jamais toucher à la base de production.')
         $t = Task-ById 'A'
         foreach ($txt in (Worker-Prompt $t), (Integrator-Prompt $t @('a.txt')), (Review-Prompt $t 'x.diff' 1)) {
             $txt | Should -Match 'Garde-fous'
@@ -184,7 +186,8 @@ Describe 'Relecture : contre-vérification des problèmes graves' {
 Describe 'Fichiers protégés (données réelles)' {
     It 'l''intégration signale une équipe qui a modifié un chemin protégé' {
         [void](New-Fixture 'A')
-        $global:Cfg | Add-Member protectedPaths @('data') -Force
+        $global:Cfg.protectedPaths = @('data')
+        $global:Cfg.protectedPaths | Should -Be @('data')                     # le réglage est bien posé avant d'être lu par FLOW
         Commit-In 'A' 'data\reel.json'
         Mode-Integrate | Should -Be 'review'
         $c = @($global:State.integration.checks | Where-Object { $_.name -eq 'fichiers protégés' })
@@ -194,7 +197,7 @@ Describe 'Fichiers protégés (données réelles)' {
     }
     It 'rien à signaler quand l''équipe n''y touche pas' {
         [void](New-Fixture 'A')
-        $global:Cfg | Add-Member protectedPaths @('data') -Force
+        $global:Cfg.protectedPaths = @('data')
         Commit-In 'A' 'src\code.txt'
         [void](Mode-Integrate)
         @($global:State.integration.checks | Where-Object { $_.name -eq 'fichiers protégés' })[0].ok | Should -BeTrue
