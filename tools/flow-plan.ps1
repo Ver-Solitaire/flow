@@ -22,11 +22,12 @@ param(
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 . (Join-Path $PSScriptRoot 'flow-common.ps1')
+. (Join-Path $PSScriptRoot 'flow-deps.ps1')
 function Fail([string]$m) { Write-Host "ERREUR : $m"; exit 1 }
 
 $git = (Get-Command git -ErrorAction SilentlyContinue).Source
 if (-not $git) { $git = @("$env:ProgramFiles\Git\cmd\git.exe", "${env:ProgramFiles(x86)}\Git\cmd\git.exe", "$env:LOCALAPPDATA\Programs\Git\cmd\git.exe") | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1 }
-if (-not $git) { Fail 'Git est introuvable (winget install --id Git.Git -e).' }
+if (-not $git) { Fail (Get-DepMissingText 'git') }
 $top = (& $git -C $Repo rev-parse --show-toplevel 2>$null | Select-Object -First 1)
 if (-not $top) { Fail "ce dossier n'est pas un dépôt Git : $Repo (git init, puis un premier commit)." }
 $root = [IO.Path]::GetFullPath($top.Trim())

@@ -318,7 +318,8 @@ if ($Simulate) { Simulate; return }
 if ($Show) { Show-Claude $Show; return }
 
 $psm = (Get-Command psmux -ErrorAction SilentlyContinue).Source
-if (-not $psm) { Write-Host 'psmux est introuvable.' -ForegroundColor Red; return }
+. (Join-Path $PSScriptRoot 'flow-deps.ps1')
+if (-not $psm) { Write-Host (Get-DepMissingText 'psmux') -ForegroundColor Red; return }
 & psmux -L $Sock kill-server *> $null
 if ((Test-Path -LiteralPath $Root) -and ($Root -like "$env:TEMP*")) { Remove-Item -LiteralPath $Root -Recurse -Force }
 New-Item -ItemType Directory -Force $Root | Out-Null

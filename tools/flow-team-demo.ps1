@@ -16,10 +16,11 @@ $Flow = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 function Q([string]$s) { "'" + ($s -replace "'", "''") + "'" }
 function Key([string]$p) { ([IO.Path]::GetFullPath($p).TrimEnd('\', '/')) -replace '[^a-zA-Z0-9]', '-' }
 
+. (Join-Path $PSScriptRoot 'flow-deps.ps1')
 $git = (Get-Command git -ErrorAction SilentlyContinue).Source
 if (-not $git) { foreach ($c in "$env:ProgramFiles\Git\cmd\git.exe", "$env:LOCALAPPDATA\Programs\Git\cmd\git.exe") { if (Test-Path $c) { $git = $c; break } } }
-if (-not $git) { Write-Host 'Git est nécessaire : winget install --id Git.Git -e' -ForegroundColor Red; return }
-if (-not (Get-Command psmux -ErrorAction SilentlyContinue)) { Write-Host 'psmux est introuvable.' -ForegroundColor Red; return }
+if (-not $git) { Write-Host (Get-DepMissingText 'git') -ForegroundColor Red; return }
+if (-not (Get-Command psmux -ErrorAction SilentlyContinue)) { Write-Host (Get-DepMissingText 'psmux') -ForegroundColor Red; return }
 
 # ───────────────────────── préparation ─────────────────────────
 & psmux -L $Sock kill-server *> $null

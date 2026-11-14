@@ -137,6 +137,7 @@ $GitExe = Find-Git
 . (Join-Path $PSScriptRoot 'flow-common.ps1')  # écritures atomiques, Q, journal
 . (Join-Path $PSScriptRoot 'flow-claudemd.ps1')  # création d'un CLAUDE.md de départ
 . (Join-Path $PSScriptRoot 'flow-profile.ps1')  # mémoire locale de la façon de travailler de l'utilisateur
+. (Join-Path $PSScriptRoot 'flow-deps.ps1')     # dépendances : une seule liste (dependances.json)
 $global:FlowLogFile = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\config\flow.log'))
 $GitId = @()
 $GitCode = 0
@@ -477,7 +478,7 @@ function Mode-Profile {
         elseif ($ch -eq 'l') {
             $order = 'merge', 'squash', 'pr', 'branch'
             $Cfg.deliver = $order[([array]::IndexOf($order, [string]$Cfg.deliver) + 1) % $order.Count]
-            if ($Cfg.deliver -eq 'pr' -and -not (Has-Cmd 'gh')) { $msg = "$Warn⚠ la pull request demande GitHub CLI (winget install --id GitHub.cli)$R" } else { $msg = '' }
+            if ($Cfg.deliver -eq 'pr' -and -not (Has-Cmd 'gh')) { $msg = "$Warn⚠ la pull request demande GitHub CLI : $(Get-DepInstallCommand (Get-FlowDep -Id 'gh'))$R" } else { $msg = '' }
         }
         elseif ($ch -eq 'e') {
             Save-ProjectConfig
@@ -1334,7 +1335,7 @@ function Mode-Setup {
         if (-not $script:GitExe) {
             $k = Message-Screen '⚑ ÉQUIPE — Git est nécessaire' @(
                 "Chaque ouvrier travaille dans sa propre copie du projet (git worktree) : il faut Git.",
-                '', "Installe-le, par exemple :  $B winget install --id Git.Git -e$R", '',
+                '', "$B$(Get-DepMissingText 'git')$R", '',
                 "$Dm puis appuie sur R pour vérifier à nouveau.$R") @('R', 'vérifier', 'Échap', 'retour')
             if ($k.Key -eq 'Escape') { return 'quit' }
             $script:GitExe = Find-Git; Init-GitId; continue
@@ -2733,7 +2734,7 @@ function Deliver-Run([string]$dlv, [string]$target, [string]$cur) {
             return @{ Ok = $true; Archive = $arch; Info = "Le travail de l'équipe est dans $target ($(if ($dlv -eq 'merge') { 'merge' } else { 'un commit' }) : « $title »)." }
         }
         'pr' {
-            if (-not (Has-Cmd 'gh')) { return @{ Ok = $false; Info = "$Err✗ GitHub CLI absent : winget install --id GitHub.cli, puis gh auth login (ou L pour une autre livraison)$R" } }
+            if (-not (Has-Cmd 'gh')) { return @{ Ok = $false; Info = "$Err✗ GitHub CLI absent : $(Get-DepInstallCommand (Get-FlowDep -Id 'gh')), puis gh auth login (ou L pour une autre livraison)$R" } }
             $o = Git-In $RepoRoot @('push', '-u', 'origin', $ib)
             if ($GitCode -ne 0) { return @{ Ok = $false; Info = "$Err✗ push impossible : $($o | Select-Object -Last 1)$R" } }
             $bf = Join-Path $RunDir 'pull-request.md'

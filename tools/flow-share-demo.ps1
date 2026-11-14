@@ -37,7 +37,8 @@ if ($Inside) {
     return
 }
 
-if (-not $G) { Write-Host 'Git est nécessaire pour cette démo (winget install --id Git.Git -e)' -ForegroundColor Red; return }
+. (Join-Path $PSScriptRoot 'flow-deps.ps1')
+if (-not $G) { Write-Host (Get-DepMissingText 'git') -ForegroundColor Red; return }
 Write-Host "`n  Préparation de la démo de partage dans $Demo …" -ForegroundColor Cyan
 & psmux -L flowshare kill-server *> $null
 if (Test-Path $Demo) { Remove-Item $Demo -Recurse -Force }
