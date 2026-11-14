@@ -16,6 +16,7 @@ BeforeAll {
     $env:GIT_AUTHOR_NAME = 't'; $env:GIT_AUTHOR_EMAIL = 't@t'; $env:GIT_COMMITTER_NAME = 't'; $env:GIT_COMMITTER_EMAIL = 't@t'
 
     $global:FlowLogFile = Join-Path $global:Base 'flow.log'   # le journal des tests ne se mélange pas à celui de l'utilisateur
+    $global:FlowNoAi = $true                                   # aucune étape ne lance un vrai Claude (juge, scribe, contre-vérification)
 
     # remplace tout ce qui toucherait l'écran, le clavier ou les notifications
     Remove-Item Alias:cls -Force -ErrorAction SilentlyContinue   # l'alias « cls » (Clear-Host) passerait avant la fonction ci-dessous

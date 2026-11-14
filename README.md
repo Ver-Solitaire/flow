@@ -312,6 +312,16 @@ Communication entre Claude : par fichiers, dans `.flow\runs\<id>\` (exclu de Git
 `taches\<X>.md` (fiche de chaque ouvrier), `resultats\<X>.md` (compte-rendu, qui signale aussi la fin).
 Une équipe interrompue se reprend au prochain lancement.
 
+### Qualité : passe légère ou complète, contre-vérification, juge, mémoire
+
+- **Passe** : le planificateur choisit la passe de contrôle. *Légère* (petite modification sans risque) : relecture sur 2 angles, ni contre-vérification ni juge. *Complète* (logique, données, plusieurs modules) : tout ce qui suit. **P** dans l'écran du plan pour changer.
+- **Relecture croisée sur 5 angles** : conformité à la fiche, non-régression, données et cas limites, logique, raccord avec les autres tâches. Chaque problème doit venir avec un scénario concret.
+- **Contre-vérification** (passe complète) : chaque problème grave est confié à un autre Claude qui essaie de le **réfuter**. Seuls ceux qui résistent sont renvoyés à l'ouvrier ; `relectures\<tâche>.md` garde le détail (confirmé / réfuté, et pourquoi).
+- **Juge final** (passe complète) : un Claude vérifie le résultat contre la demande, le « terminé quand » de chaque tâche et les vérifications du projet, et **revérifie lui-même au moins un fait**. Son verdict s'affiche à l'écran « à valider » ; s'il n'est pas convaincu, FLOW demande une confirmation avant de livrer.
+- **Garde-fous** transmis à chaque Claude de l'équipe : rien en ligne ni envoyé sans accord, rien supprimé sans comprendre, aucun secret, aucun contournement de test ou de permission, comptes rendus honnêtes (un test non lancé est « non lancé »), plus petite modification qui règle complètement le besoin. Dans `.flow\config.json` : `guardrails` (règles en plus) et `protectedPaths` (chemins de données réelles : si l'équipe en modifie un, une vérification « fichiers protégés » échoue).
+- **Mémoire du projet** : **G** dans l'écran du profil crée `CLAUDE.md` et le dossier `memoire\` (`INDEX.md`, état actuel, décisions, pièges, historique) ; à commiter. À la fin de chaque équipe, un **scribe** met ces fiches à jour (il remplace l'ancien état, ajoute les pièges rencontrés et une ligne d'historique) et son commit part avec la livraison. Il ne touche à rien d'autre que `memoire\`.
+- Interrupteurs dans `.flow\config.json` : `"verify": false`, `"judge": false`, `"scribe": false`.
+
 Prérequis : **Git**, et un projet sous Git (sinon la fenêtre propose `git init` + premier commit).
 
 ### Sur n'importe quel projet
@@ -336,6 +346,8 @@ Au premier passage dans un projet, l'outil **détecte son workflow** et te le mo
 | `deliver` | historique et remote (pull requests GitHub, merges, linéaire) | livraison : `merge`, `squash`, `pr` (gh), `branch` |
 | `targetBranch` | — (vide = branche actuelle) | point de départ et cible de la livraison |
 | `instructions` | — | règles du projet transmises à chaque Claude |
+| `guardrails` | — | règles de sécurité en plus des garde-fous de base |
+| `protectedPaths` | — | chemins de données réelles que l'équipe ne doit pas modifier (vérification « fichiers protégés ») |
 
 Dans l'écran du profil (**F2** depuis l'accueil) : **A** demande à Claude de lire README, CONTRIBUTING,
 CLAUDE.md et la CI pour compléter le profil (commandes réelles, règles du projet) ; **L** change le mode de

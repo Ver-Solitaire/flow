@@ -454,8 +454,11 @@ function Mode-Profile {
         if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'CLAUDE.md'))) {
             $L.Add(''); $L.Add("  $Warn⚠ pas de CLAUDE.md : les Claude connaîtront moins bien le projet — G pour en créer un modèle maintenant.$R")
         }
+        elseif (-not (Test-Path -LiteralPath (Join-Path $RepoRoot 'memoire\INDEX.md'))) {
+            $L.Add(''); $L.Add("  $Dm ℹ pas de mémoire du projet (dossier memoire\) : G pour la créer ; après chaque travail, un « scribe » la met à jour.$R")
+        }
         $L.Add('')
-        $L.Add((Keys @('Entrée', 'valider', 'A', 'affiner avec Claude', 'L', 'mode de livraison', 'E', 'modifier (JSON)', 'D', 'redétecter', 'G', 'créer CLAUDE.md', 'Échap', 'retour')))
+        $L.Add((Keys @('Entrée', 'valider', 'A', 'affiner avec Claude', 'L', 'mode de livraison', 'E', 'modifier (JSON)', 'D', 'redétecter', 'G', 'créer CLAUDE.md + mémoire', 'Échap', 'retour')))
         $L.Add("  $Dm Enregistré dans .flow\config.json : tu peux le commiter pour le partager avec le projet.$R")
         if ($msg) { $L.Add("  $msg") }
         Show-Frame $L
@@ -464,7 +467,8 @@ function Mode-Profile {
         elseif ($k.Key -eq 'Escape') { if ($first) { Save-ProjectConfig }; return 'home' }
         elseif ($ch -eq 'g') {
             $f = New-ClaudeMd $RepoRoot
-            $msg = if ($f) { "$Ok✓ CLAUDE.md créé : $f — à relire et compléter$R" } else { "$Dm CLAUDE.md existe déjà$R" }
+            $mem = @(New-ProjectMemory $RepoRoot)
+            $msg = if ($f) { "$Ok✓ CLAUDE.md et mémoire du projet (memoire\) créés : à relire, compléter et commiter$R" } elseif ($mem.Count) { "$Ok✓ mémoire du projet créée (memoire\, $($mem.Count) fichier(s)) : à commiter pour que l'équipe la tienne à jour$R" } else { "$Dm CLAUDE.md et mémoire existent déjà$R" }
             if ($f) { Write-FlowLog "CLAUDE.md créé dans $RepoRoot" }
         }
         elseif ($ch -eq 'a') { $msg = Refine-WithClaude; Cls }
@@ -576,12 +580,17 @@ Ton travail :
        "sonnet" : tâche standard (fonctionnalité bien définie, tests, refactorisation locale) ;
        "opus"   : tâche complexe (architecture, débogage difficile, changement transversal, algorithme délicat).
      Ne mets "opus" que si c'est justifié : les tâches simples vont plus vite et coûtent moins avec un modèle léger.
+   - choisis aussi la PASSE de contrôle ("depth") :
+       "light" : petite modification locale et sans risque (texte, documentation, style, configuration, un seul module sans logique métier) ;
+       "full"  : dès qu'il y a de la logique, des données, de la sécurité, plusieurs modules ou de l'incertitude.
+     En cas de doute : "full".
 $(Conventions-Text)
 4. Réponds UNIQUEMENT avec un objet JSON valide, sans aucun texte avant ou après, de cette forme :
 {
   "summary": "la demande résumée en une phrase",
   "commitTitle": "titre du commit (ou de la pull request) final, dans le style de commit du projet",
   "brief": "brief commun, en Markdown",
+  "depth": "light | full",
   "tasks": [
     { "id": "A", "title": "titre court", "goal": "ce qu'il faut faire, précisément",
       "files": ["chemins relatifs des fichiers à créer ou modifier"], "depends": [], "done": "critères de fin vérifiables",
@@ -622,6 +631,68 @@ function Conventions-Text {
     if ($Cfg.instructions) { $o += 'Règles du projet :'; $o += [string]$Cfg.instructions }
     if (-not $o.Count) { return '' }
     "`n## Workflow du projet (à respecter)`n" + ($o -join "`n") + "`n"
+}
+
+# ── qualité : passe légère / complète, garde-fous, contre-vérification, juge, scribe ──
+# $global:FlowNoAi (posé à $true par les tests) : aucune étape ne lance alors de vrai Claude
+function Depth { if ("$($State.depth)" -eq 'light') { 'light' } else { 'full' } }
+function Depth-Label { if ((Depth) -eq 'light') { 'légère' } else { 'complète' } }
+function Set-IntProp([string]$name, $value) { $State.integration | Add-Member -NotePropertyName $name -NotePropertyValue $value -Force }
+
+function Guardrails-Text {
+    # règles transmises à chaque Claude de l'équipe (les équipes tournent avec toutes les permissions : elles comptent d'autant plus)
+    $o = @(
+        '## Garde-fous (valables pour tous les membres de l''équipe)',
+        '- Ne rien mettre en ligne, publier, envoyer (message, e-mail…) ni lancer d''action irréversible : c''est toujours une décision de l''utilisateur.',
+        '- Ne rien supprimer ni écraser sans avoir compris ce que c''est.',
+        '- Ne jamais afficher, copier ni commiter un secret (clés, mots de passe, fichiers .env).',
+        '- Ne pas contourner un refus de permission, un antivirus ou un test qui échoue (pas de --no-verify, pas de test désactivé pour « passer ») : le signaler.',
+        '- Ne tuer aucun processus qui ne se trouve pas dans le dossier du projet.',
+        '- Honnêteté : donne les chiffres exacts des tests ; un test non lancé est « non lancé », jamais « vert » ; dis ce qui a été sauté, contourné ou laissé ouvert.',
+        '- Style : la plus petite modification qui règle COMPLÈTEMENT le besoin. Réutilise d''abord ce qui existe (fonctions, motifs voisins) ; pas d''abstraction, d''option ni de code « pour plus tard » non demandés ; mais termine tout ce que ta modification touche (appelants, tests, données).'
+    )
+    $prot = @(@($Cfg.protectedPaths) | Where-Object { $_ })
+    if ($prot.Count) { $o += "- Données réelles à ne jamais modifier : $($prot -join ', ') (si un test doit y toucher : sauvegarde d'abord, restaure ensuite et vérifie l'empreinte SHA-256)." }
+    foreach ($g in @($Cfg.guardrails)) { if ($g) { $o += "- $g" } }
+    "`n" + ($o -join "`n") + "`n"
+}
+
+function Review-Angles {
+    if ((Depth) -eq 'light') {
+        @('- conformite : ce qui ne fait pas ce que demande la fiche, un critère de fin non rempli, le non-respect des décisions du brief ;',
+          '- regression : effets de bord sur le comportement existant, appelants de ce qui est modifié, raccord avec les autres tâches (noms, signatures, formats).') -join "`n"
+    } else {
+        @('- conformite : ce qui ne fait pas ce que demande la fiche, un critère de fin non rempli ;',
+          '- regression : effets de bord sur le comportement existant, appelants et usages de ce qui est modifié ;',
+          '- donnees : cas limites, entrées vides ou invalides, erreurs non gérées, perte ou corruption de données, accès concurrents ;',
+          '- logique : erreurs de calcul, de condition ou de séquence qui casseraient à l''usage ;',
+          '- raccord : respect des décisions communes du brief, raccord avec les autres tâches (noms, signatures, formats, emplacements), fichiers modifiés hors périmètre sans raison, comportement ajouté sans test alors que le projet en a.') -join "`n"
+    }
+}
+
+function Parse-ClaudeJson([string]$out) {
+    # sortie de « claude -p --output-format json » → l'objet JSON demandé dans la réponse, ou $null
+    try {
+        $j = $out | ConvertFrom-Json -ErrorAction Stop
+        if ($j.is_error) { return $null }
+        $txt = if ($j.result) { [string]$j.result } else { $out }
+        $a = $txt.IndexOf('{'); $z = $txt.LastIndexOf('}')
+        if ($a -ge 0 -and $z -gt $a) { return ($txt.Substring($a, $z - $a + 1) | ConvertFrom-Json -ErrorAction Stop) }
+    } catch {}
+    $null
+}
+
+function Start-ClaudeJob([string]$cwd, $acct, [string]$promptFile, [string]$model, [string]$tools) {
+    # Claude en mode non interactif dans $cwd, sur le compte donné ; la consigne est dans un fichier
+    $msg = "Lis le fichier $promptFile et suis exactement ses instructions. Ta réponse finale doit être uniquement l'objet JSON demandé."
+    Start-Job -ScriptBlock {
+        param($cwd, $dir, $msg, $runDir, $model, $tools)
+        Set-Location -LiteralPath $cwd
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
+        if ($dir) { $env:CLAUDE_CONFIG_DIR = $dir } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
+        $out = & claude -p $msg --model $model --output-format json --allowedTools $tools --add-dir $runDir 2>&1 | Out-String
+        [pscustomobject]@{ Code = $LASTEXITCODE; Out = $out }
+    } -ArgumentList $cwd, $acct.Dir, $msg, $RunDir, $model, $tools
 }
 
 function Worker-Prompt($t) {
@@ -678,6 +749,7 @@ complexe que prévu : écris ta question dans $(Help-File $t.id) (le contexte, c
 puis attends. Le conseiller étudie ton travail et répond dans $(Advice-File $t.id) ; tu recevras un message ici.
 L'utilisateur peut aussi t'écrire directement dans ce panneau.
 $conv
+$(Guardrails-Text)
 "@
 }
 
@@ -694,6 +766,7 @@ $(@($files) | ForEach-Object { "- $_" } | Out-String)
 4. Termine la fusion : git add -A puis git commit --no-edit
 5. Écris un court compte-rendu dans $(Join-Path $RunDir "resultats\_integration-$($t.id).md").
 $(Conventions-Text)
+$(Guardrails-Text)
 "@
 }
 
@@ -1123,7 +1196,7 @@ function Mode-Home {
         base = (Git-In $RepoRoot @('rev-parse', $baseRef) | Select-Object -First 1).Trim()
         baseBranch = $(if ($Cfg.targetBranch) { [string]$Cfg.targetBranch } else { (Git-In $RepoRoot @('rev-parse', '--abbrev-ref', 'HEAD') | Select-Object -First 1).Trim() })
         prefix = [string]$Cfg.branchPrefix; deliver = [string]$Cfg.deliver; commitTitle = ''
-        summary = ''; brief = ''; planner = ''; tasks = @(); crossReview = (-not $NoReview)
+        summary = ''; brief = ''; planner = ''; depth = 'full'; tasks = @(); crossReview = (-not $NoReview)
         integration = [pscustomobject]@{ merged = @(); skipped = @(); conflict = ''; tests = $null; checks = @(); delivered = '' }
     }
     Use-Run $st
@@ -1273,6 +1346,7 @@ function Apply-Plan($plan) {
     $State.summary = if ($plan.summary) { [string]$plan.summary } else { ($State.prompt -split "`n")[0] }
     $State.commitTitle = if ($plan.commitTitle) { [string]$plan.commitTitle } else { '' }
     $State.brief = [string]$plan.brief
+    $State.depth = if ("$($plan.depth)".Trim().ToLower() -eq 'light') { 'light' } else { 'full' }
     $State.tasks = $tasks
     try { [void](Topo $tasks) } catch { foreach ($t in $tasks) { $t.depends = @() } }
     Assign-Accounts $tasks
@@ -1332,9 +1406,10 @@ function Mode-Plan {
             $L.Add("  $Warn⚠ $(($miss.Label) -join ', ') : non connecté$(if ($onMiss.Count) { " — tâche(s) $(($onMiss.id) -join ', ') à réattribuer" } else { ' — tout est réparti sur les comptes connectés' }) · C pour le connecter$R")
         }
         $L.Add("  $Dm relecture croisée : $(if ($State.crossReview) { 'activée — chaque tâche finie est relue par un Claude d''un autre compte avant la fusion' } else { 'désactivée' }) · V pour changer$R")
+        $L.Add("  $Dm passe : $B$(Depth-Label)$R$Dm — $(if ((Depth) -eq 'light') { 'relecture sur 2 angles, sans contre-vérification ni juge final' } else { 'relecture sur 5 angles, contre-vérification de chaque défaut, juge final' }) · P pour changer$R")
         if ($autoAt) { $L.Add("  $Teal$B⏱ lancement automatique dans $([int][Math]::Max(0, [Math]::Ceiling(($autoAt - (Get-Date)).TotalSeconds))) s$R $Dm— appuie sur une touche pour garder la main et modifier le plan$R") }
         $L.Add('')
-        $L.Add((Keys @('Entrée', 'lancer l''équipe', 'Tab', 'compte', 'M', 'modèle', 'A', 'répartir', 'C', 'comptes', 'E', 'modifier le plan', 'R', 'replanifier', 'X', 'abandonner', 'Échap', 'retour')))
+        $L.Add((Keys @('Entrée', 'lancer l''équipe', 'Tab', 'compte', 'M', 'modèle', 'A', 'répartir', 'C', 'comptes', 'E', 'modifier le plan', 'R', 'replanifier', 'P', 'passe', 'X', 'abandonner', 'Échap', 'retour')))
         $L.Add("  $Dm clic : choisir une tâche · clic sur ◆ compte ou ◇ modèle : le changer$R")
         Show-Frame $L
         foreach ($pz in $planZones) {
@@ -1368,6 +1443,7 @@ function Mode-Plan {
         }
         elseif ($ch -eq 'a') { Assign-Accounts $ts; Save-State }
         elseif ($ch -eq 'v') { $State.crossReview = -not $State.crossReview; Save-State }
+        elseif ($ch -eq 'p') { $State.depth = if ((Depth) -eq 'light') { 'full' } else { 'light' }; Save-State }
         elseif ($ch -eq 'c') {
             if (-not @(Missing-Accounts).Count) { [void](Message-Screen '⚑ ÉQUIPE — comptes' @("$Ok Tous les comptes sont connectés :$R $(Accounts-Line)") @('Entrée', 'retour')) }
             elseif ((Connect-Missing) -gt 0) { Assign-Accounts $ts; Save-State }   # un compte de plus : nouvelle répartition
@@ -1518,20 +1594,19 @@ $prev
 3. Regarde les autres tâches de l'équipe (fiches dans $(Join-Path $RunDir 'taches'), comptes-rendus déjà écrits dans
    $(Join-Path $RunDir 'resultats'), annonces dans $(Join-Path $RunDir 'annonces')) : ce travail doit s'y raccorder.
 
-Cherche, par ordre d'importance :
-- ce qui ne fait pas ce que demande la fiche, ou un critère de fin non rempli ;
-- les erreurs de logique et les cas non gérés qui casseraient à l'usage ;
-- ce qui ne respecte pas les décisions communes du brief ou ne se raccorde pas aux autres tâches (noms, signatures,
-  formats de données, emplacements) ;
-- les fichiers modifiés hors du périmètre de la tâche sans raison donnée ;
-- un comportement ajouté sans aucun test alors que le projet en a.
+Cherche sous ces ANGLES (note l'angle de chaque problème) :
+$(Review-Angles)
+$(if ((Depth) -eq 'light') { "PASSE LÉGÈRE : ne signale que les problèmes bloquants ou importants.`n" })
 Ne signale ni le style ni les préférences personnelles. Si le travail est bon, dis-le : ne cherche pas des problèmes
-pour en trouver. Un problème = un endroit précis et la correction que tu proposes.
-
+pour en trouver. Un problème = un endroit précis, un SCÉNARIO concret (situation ou entrée → ce qui se passe de mal ;
+sans scénario, ne le signale pas) et la correction que tu proposes. Un autre Claude essaiera ensuite de réfuter chaque
+problème : signale seulement ce dont tu es sûr après avoir lu le code.
+$(Guardrails-Text)
 Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ni après :
 { "verdict": "ok" ou "changes",
   "summary": "ton avis en deux phrases",
-  "issues": [ { "severity": "bloquant" ou "important" ou "mineur", "file": "chemin", "problem": "ce qui ne va pas", "fix": "correction proposée" } ] }
+  "issues": [ { "severity": "bloquant" ou "important" ou "mineur", "angle": "$(if ((Depth) -eq 'light') { 'conformite | regression' } else { 'conformite | regression | donnees | logique | raccord' })",
+                "file": "chemin", "problem": "ce qui ne va pas", "scenario": "situation → conséquence", "fix": "correction proposée" } ] }
 "verdict" vaut "changes" seulement s'il y a au moins un problème bloquant ou important.
 "@
 }
@@ -1565,8 +1640,54 @@ function Start-Review($t) {
     Save-State
 }
 
+function Pick-Verifier($revAcct) {
+    # un compte différent de celui du relecteur si possible : la contre-vérification ne doit pas être un écho de la relecture
+    $u = @(Usable-Accounts)
+    $other = @($u | Where-Object { $_.Id -ne $revAcct.Id })
+    if ($other.Count) { $other | Sort-Object { Acct-Load $_ } | Select-Object -First 1 } else { $revAcct }
+}
+
+function Verify-Prompt($t, $issues, [int]$round) {
+    $list = for ($i = 0; $i -lt $issues.Count; $i++) {
+        $is = $issues[$i]
+        "$($i + 1). [$($is.severity)] $($is.file) — $($is.problem)`n   scénario : $($is.scenario)`n   correction proposée : $($is.fix)"
+    }
+    @"
+Tu es le CONTRE-VÉRIFICATEUR de la tâche $($t.id) — $($t.title). Un relecteur a signalé les problèmes ci-dessous dans le travail
+d'un autre Claude. Ton rôle est d'essayer de les RÉFUTER avant qu'on fasse perdre du temps à l'ouvrier. Tu ne modifies AUCUN fichier.
+
+1. Lis le brief : $(Join-Path $RunDir 'BRIEF.md'), la fiche : $(Join-Path $RunDir "taches\$($t.id).md") et le compte-rendu : $(Result-File $t.id).
+2. Le code est dans $($t.worktree) (lecture seule : Read, Grep, Glob). Pour CHAQUE problème, lis le code réel et cherche pourquoi il
+   pourrait être faux : il n'existe pas, le scénario est impossible, c'est voulu par la fiche ou le brief, c'est déjà géré ailleurs.
+3. real=false si tu as réfuté le problème ; en cas de doute sérieux, real=true. Si la correction proposée est mauvaise, donne la bonne dans correctedFix.
+
+Problèmes à vérifier :
+$($list -join "`n")
+
+Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ni après :
+{ "verdicts": [ { "n": 1, "real": true ou false, "reason": "pourquoi, en une phrase", "correctedFix": "" } ] }
+"@
+}
+
+function Conclude-Review($t, $revAcct, $serious, [bool]$verified) {
+    # conclusion d'une relecture (après contre-vérification éventuelle) : corrections renvoyées à l'ouvrier, ou tâche relue
+    $id = $t.id
+    if ($serious.Count) {
+        $t.review = 'changes'
+        $sure = if ($verified) { ' (confirmés par une contre-vérification)' } else { '' }
+        $sent = Send-ToPane $id "[FLOW] Relecture croisée par $($revAcct.Label) : $($serious.Count) point(s) à corriger$sure. Lis $(Review-File $id) (dernière section), corrige les points bloquants et importants, relance les vérifications, fais un commit, puis RÉÉCRIS ton compte-rendu $(Result-File $id) en y ajoutant ce que tu as corrigé : c'est ce qui signale que tu as fini."
+        if ($Psmux) { Set-PaneState $id 'busy' "✎ corrige après relecture ($($revAcct.Short))" }
+        Notify "⌕ Relecture de la tâche $id" "$($serious.Count) point(s) à corriger, renvoyés à l'ouvrier."
+        if ($sent) { return "$Info⌕ $id relue par $($revAcct.Short) : $($serious.Count) correction(s) demandée(s) à l'ouvrier$R" }
+        return "$Err⌕ $id : corrections demandées mais panneau introuvable (L pour relancer, T pour accepter)$R"
+    }
+    $t.review = 'ok'
+    "$Ok⌕ $id relue par $($revAcct.Short) : rien de bloquant$(if ($verified) { ' (après contre-vérification)' })$R"
+}
+
 function Check-Reviews {
-    # relectures rendues : écrites dans relectures\<tâche>.md ; s'il y a des corrections, l'ouvrier est prévenu
+    # relectures rendues : écrites dans relectures\<tâche>.md ; chaque problème grave est contre-vérifié (passe complète) ;
+    # s'il reste des corrections, l'ouvrier est prévenu
     $note = ''
     foreach ($id in @($RevJobs.Keys)) {
         $a = $RevJobs[$id]
@@ -1578,14 +1699,34 @@ function Check-Reviews {
         }
         $rv = Receive-Job $a.Job; Remove-Job $a.Job -Force; $RevJobs.Remove($id)
         $t = Task-ById $id
-        $rvw = $null
-        try {
-            $j = $rv.Out | ConvertFrom-Json -ErrorAction Stop
-            $txt = [string]$j.result; $x = $txt.IndexOf('{'); $z = $txt.LastIndexOf('}')
-            if (-not $j.is_error -and $x -ge 0 -and $z -gt $x) { $rvw = $txt.Substring($x, $z - $x + 1) | ConvertFrom-Json -ErrorAction Stop }
-        } catch { $rvw = $null }
-        $head = "`n---`n## Relecture n°$($a.Round) du $(Get-Date -Format 'HH:mm') — par $($a.Acct.Label) ($($a.Model))`n`n"
-        if (-not $rvw) {
+        $parsed = Parse-ClaudeJson "$($rv.Out)"
+        $head = "`n---`n## $(if ($a.Phase -eq 'verify') { 'Contre-vérification' } else { 'Relecture' }) n°$($a.Round) du $(Get-Date -Format 'HH:mm') — par $($a.Acct.Label) ($($a.Model))`n`n"
+
+        if ($a.Phase -eq 'verify') {
+            # contre-vérification rendue : on garde les problèmes qui ont résisté
+            $verdicts = @(@($parsed.verdicts) | Where-Object { $_ })
+            $real = @(); $refuted = @(); $md = $head
+            for ($i = 0; $i -lt $a.Issues.Count; $i++) {
+                $is = $a.Issues[$i]
+                $v = $verdicts | Where-Object { [int]$_.n -eq ($i + 1) } | Select-Object -First 1
+                if ($v -and $v.real -eq $false) {
+                    $refuted += $is
+                    $md += "- **réfuté** — ``$($is.file)`` : $($is.problem)`n  - pourquoi : $($v.reason)`n"
+                } else {
+                    $fix = if ($v -and "$($v.correctedFix)".Trim()) { "$($v.correctedFix)" } else { "$($is.fix)" }
+                    $real += [pscustomobject]@{ severity = $is.severity; file = $is.file; problem = $is.problem; fix = $fix }
+                    $md += "- **confirmé** [$($is.severity)] — ``$($is.file)`` : $($is.problem)`n  - correction à faire : $fix$(if ($v) { "`n  - vérifié : $($v.reason)" })`n"
+                }
+            }
+            if (-not $verdicts.Count) { $md += "`n(la contre-vérification n'a pas pu être lue : les problèmes sont conservés tels que signalés)`n" }
+            Add-Content -LiteralPath (Review-File $id) $md -Encoding utf8
+            Write-Exchange $a.Acct.Id $id 'verification' "$($real.Count) problème(s) confirmé(s), $($refuted.Count) réfuté(s)$(foreach ($r1 in @($refuted | Select-Object -First 2)) { " · réfuté : $($r1.file) — $($r1.problem)" })" $a.Acct.Id $t.account
+            $note = Conclude-Review $t $a.Reviewer $real ($verdicts.Count -gt 0)
+            continue
+        }
+
+        $rvw = $parsed
+        if (-not $rvw -or -not $rvw.PSObject.Properties['verdict']) {
             # relecteur muet, hors délai ou réponse illisible : l'équipe n'est pas bloquée, mais la tâche n'est PAS « relue »
             $raw = Join-Path $RunDir "relectures\$id-$($a.Round).sortie.txt"
             try { Set-Content -LiteralPath $raw "$($rv.Out)" -Encoding utf8 } catch {}
@@ -1601,24 +1742,31 @@ function Check-Reviews {
         $issues = @($rvw.issues | Where-Object { $_ })
         $serious = @($issues | Where-Object { "$($_.severity)" -match 'bloquant|important' })
         $md = $head + "**Avis :** $($rvw.summary)`n"
-        foreach ($is in $issues) { $md += "`n- **[$($is.severity)]** ``$($is.file)`` — $($is.problem)`n  - correction proposée : $($is.fix)" }
+        foreach ($is in $issues) {
+            $md += "`n- **[$($is.severity)]**$(if ($is.angle) { " ($($is.angle))" }) ``$($is.file)`` — $($is.problem)"
+            if ($is.scenario) { $md += "`n  - scénario : $($is.scenario)" }
+            $md += "`n  - correction proposée : $($is.fix)"
+        }
         Add-Content -LiteralPath (Review-File $id) ($md + "`n") -Encoding utf8
         Write-Exchange $a.Acct.Id $id 'relecture' "$(if ($serious.Count) { "$($serious.Count) point(s) à corriger" } else { 'rien de bloquant' }) — $($rvw.summary)$(foreach ($is in @($serious | Select-Object -First 2)) { " · [$($is.severity)] $($is.file) : $($is.problem)" })" $a.Acct.Id $t.account
-        if ("$($rvw.verdict)" -eq 'changes' -and $serious.Count) {
-            $t.review = 'changes'
-            $sent = Send-ToPane $id "[FLOW] Relecture croisée par $($a.Acct.Label) : $($serious.Count) point(s) à corriger. Lis $(Review-File $id) (dernière section), corrige les points bloquants et importants, relance les vérifications, fais un commit, puis RÉÉCRIS ton compte-rendu $(Result-File $id) en y ajoutant ce que tu as corrigé : c'est ce qui signale que tu as fini."
-            if ($Psmux) { Set-PaneState $id 'busy' "✎ corrige après relecture ($($a.Acct.Short))" }
-            Notify "⌕ Relecture de la tâche $id" "$($serious.Count) point(s) à corriger, renvoyés à l'ouvrier."
-            $note = if ($sent) { "$Info⌕ $id relue par $($a.Acct.Short) : $($serious.Count) correction(s) demandée(s) à l'ouvrier$R" } else { "$Err⌕ $id : corrections demandées mais panneau introuvable (L pour relancer, T pour accepter)$R" }
-        } else {
-            $t.review = 'ok'
-            $note = "$Ok⌕ $id relue par $($a.Acct.Short) : rien de bloquant$R"
+
+        if ($serious.Count -and (Depth) -eq 'full' -and $Cfg.verify -ne $false -and -not $global:FlowNoAi) {
+            # passe complète : un autre Claude essaie de réfuter chaque problème avant d'en déranger l'ouvrier
+            $va = Pick-Verifier $a.Acct
+            $vmodel = Review-Model $t.model
+            $vf = Join-Path $RunDir "relectures\$id-$($a.Round).verif.md"
+            Set-Content -LiteralPath $vf (Verify-Prompt $t $serious $a.Round) -Encoding utf8
+            $vjob = Start-ClaudeJob $t.worktree $va $vf $vmodel 'Read,Grep,Glob'
+            $RevJobs[$id] = [pscustomobject]@{ Job = $vjob; Model = $vmodel; Acct = $va; Round = $a.Round; Start = Get-Date; Phase = 'verify'; Issues = $serious; Reviewer = $a.Acct }
+            Write-Exchange $va.Id $id 'verification' "contre-vérification de $($serious.Count) problème(s) signalé(s) par $($a.Acct.Short) (on essaie de les réfuter)" $va.Id $t.account
+            $note = "$Info⌕ $id : $($serious.Count) point(s) signalé(s), contre-vérification par $($va.Short)…$R"
+            continue
         }
+        $note = Conclude-Review $t $a.Acct $serious $false
     }
     Save-State
     $note
 }
-
 function Write-Exchange {
     # Journal des échanges entre les Claude de l'équipe (echanges.jsonl, lu par le panneau « échanges » du profil).
     # $From / $To : lettre d'une tâche, « FLOW », « Toi » ou « tous » ; $FromAcct / $ToAcct : identifiants de compte (facultatifs).
@@ -1942,6 +2090,120 @@ function Final-Body {
     $lines -join "`n"
 }
 
+function Protected-Check([string]$iw) {
+    # garde-fou « données réelles » : aucun fichier des chemins protégés du profil ne doit avoir été modifié par l'équipe
+    $pats = @(@($Cfg.protectedPaths) | Where-Object { $_ })
+    if (-not $pats.Count) { return @() }
+    $files = @(Git-In $iw @('-c', 'core.quotepath=false', 'diff', '--name-only', "$($State.base)..HEAD") | ForEach-Object { "$_".Trim().Replace('\', '/') } | Where-Object { $_ })
+    $hit = @($files | Where-Object { $fl = $_; @($pats | Where-Object { $pt = ($_ -replace '\\', '/').TrimEnd('/'); $fl -like $pt -or $fl -like "$pt/*" }).Count })
+    [pscustomobject]@{ name = 'fichiers protégés'; cmd = ($pats -join ', '); ok = ($hit.Count -eq 0); ran = $true
+        tail = @($hit | Select-Object -First 8 | ForEach-Object { "modifié : $_" }) }
+}
+
+function Scribe-On([string]$iw) { $Cfg.scribe -ne $false -and -not $global:FlowNoAi -and (Test-Path -LiteralPath (Join-Path $iw 'memoire\INDEX.md')) }
+
+function Scribe-Prompt([string]$iw) {
+    @"
+Tu es le SCRIBE de l'équipe. Le travail de toutes les tâches est fusionné dans $iw. Ton rôle : tenir à jour la MÉMOIRE du projet
+(dossier memoire\), et RIEN d'autre : tu ne modifies aucun fichier en dehors de memoire\. Les prochains Claude n'ont aucun souvenir de
+cette équipe : tout ce qui doit survivre doit être écrit là.
+
+Lis d'abord memoire\INDEX.md (règles et liste des fiches), puis : le brief $(Join-Path $RunDir 'BRIEF.md'), les comptes-rendus
+$(Join-Path $RunDir 'resultats'), les relectures $(Join-Path $RunDir 'relectures'), les annonces $(Join-Path $RunDir 'annonces') et,
+s'il existe, $(Join-Path $RunDir 'verifications.txt'). Demande de l'utilisateur : « $($State.prompt) ».
+
+À faire (date du jour : $(Get-Date -Format 'dd/MM/yyyy')) :
+1. etat-actuel.md : REMPLACE l'ancien état par l'état d'après cette équipe (ce qui marche, ce qui est en cours, ce qui reste) ; mets à jour « Mis à jour : ».
+2. decisions.md : ajoute les décisions importantes prises par l'équipe (noms, choix de conception) avec leur raison, si elles n'y sont pas déjà.
+3. pieges.md : ajoute chaque piège RENCONTRÉ (problème trouvé en relecture, erreur de test, annonce d'un coéquipier) sous la forme symptôme → cause → parade. N'invente rien.
+4. historique.md : ajoute UNE ligne datée en haut : « $(Get-Date -Format 'dd/MM/yyyy') — <titre du travail> (équipe $($State.id)) : <résumé en une phrase> ».
+5. Si une fiche thématique existe pour le sujet touché, mets-la à jour de la même façon (REMPLACER, pas ajouter en bas). Ne crée une nouvelle fiche (et sa ligne dans INDEX.md) que si un nouveau sujet le mérite.
+Règles : factuel, court, en français ; cite le fichier source entre parenthèses ; si tu n'es pas sûr d'un fait, ne l'écris pas ; ne recopie aucun secret.
+$(Guardrails-Text)
+Réponds UNIQUEMENT avec un objet JSON : { "fiches": ["fichiers modifiés"], "resume": "une phrase" }
+"@
+}
+
+function Invoke-Scribe([string]$iw) {
+    # une seule fois par équipe (marqueur dans l'état) ; ne garde que ce qui est dans memoire\ et le commite sur la branche d'intégration
+    if (-not (Scribe-On $iw)) { Set-IntProp 'scribe' 'non'; Save-State; return }
+    $acct = Least-Loaded
+    $pf = Join-Path $RunDir 'scribe.prompt.md'
+    Set-Content -LiteralPath $pf (Scribe-Prompt $iw) -Encoding utf8
+    $job = Start-ClaudeJob $iw $acct $pf 'sonnet' 'Read,Grep,Glob,Edit,Write'
+    $res = Wait-Job-Spinner $job "le scribe (sonnet, $($acct.Label)) met à jour la mémoire du projet (memoire\)…"
+    if ($null -eq $res) { Set-IntProp 'scribe' 'annulé'; Save-State; return }
+    Set-Content -LiteralPath (Join-Path $RunDir 'scribe-sortie.txt') "$($res.Out)" -Encoding utf8
+    $st = @(Git-In $iw @('-c', 'core.quotepath=false', 'status', '--porcelain', '-uall') | Where-Object { "$_".Trim() })
+    $inMem = @(); $outside = @()
+    foreach ($l in $st) {
+        $path = ("$l".Substring(3).Trim().Trim('"')).Replace('\', '/')
+        if ($path -like 'memoire/*') { $inMem += $path } else { $outside += @{ Path = $path; Untracked = ("$l".StartsWith('??')) } }
+    }
+    # le scribe n'a pas à toucher au reste : ses modifications hors memoire\ (non commitées) sont retirées
+    foreach ($o in $outside) { if (-not $o.Untracked) { [void](Git-In $iw @('checkout', '--', $o.Path)) } }
+    if ($outside.Count) { Write-FlowLog "scribe : $($outside.Count) fichier(s) hors memoire\ ignoré(s)" 'WARN' }
+    if ($inMem.Count) {
+        [void](Git-In $iw @('add', '--', 'memoire'))
+        [void](Git-In $iw @('commit', '-q', '--no-verify', '-m', "flow: mémoire du projet mise à jour (équipe $($State.id))"))
+        Set-IntProp 'scribe' $(if ($GitCode -eq 0) { "ok:$($inMem.Count)" } else { 'échec' })
+        Write-Exchange 'FLOW' 'tous' 'memoire' "mémoire du projet mise à jour : $((@($inMem | ForEach-Object { Split-Path $_ -Leaf }) | Select-Object -First 6) -join ', ')" $acct.Id ''
+    } else { Set-IntProp 'scribe' 'rien' }
+    Save-State
+}
+
+function Judge-On { $Cfg.judge -ne $false -and -not $global:FlowNoAi -and (Depth) -eq 'full' }
+
+function Judge-Prompt([string]$iw) {
+    $merged = @($State.integration.merged | ForEach-Object { Task-ById $_ } | Where-Object { $_ })
+    $crit = @($merged | ForEach-Object { "- tâche $($_.id) ($($_.title)) : $($_.done)" })
+    $chk = @(@($State.integration.checks) | ForEach-Object { "- $($_.name) : $(if ($_.ok) { 'réussi' } elseif ($_.ran) { 'ÉCHEC' } else { 'non lancé' })" })
+    @"
+Tu es le JUGE final d'une équipe de Claude. Le travail de toutes les tâches est fusionné dans $iw (branche $(Int-Branch)), à partir de $($State.base).
+Tu ne modifies AUCUN fichier.
+
+DEMANDE DE L'UTILISATEUR :
+<<<
+$($State.prompt)
+>>>
+
+CRITÈRE DE RÉUSSITE (relis-le point par point, sans indulgence) :
+- chaque tâche fusionnée remplit son « Terminé quand » :
+$($crit -join "`n")
+- les vérifications du projet passent (chiffres exacts dans $(Join-Path $RunDir 'verifications.txt') s'il existe) :
+$(if ($chk.Count) { $chk -join "`n" } else { '- (aucune vérification configurée : dis-le, ce n''est pas une preuve)' })
+- aucun défaut grave confirmé n'est resté ouvert (relectures et contre-vérifications dans $(Join-Path $RunDir 'relectures'))
+- les données réelles du projet sont intactes$(if (@($Cfg.protectedPaths).Count) { " ($(@($Cfg.protectedPaths) -join ', '))" })
+- la demande est satisfaite dans son ensemble
+
+Méthode : lis le brief $(Join-Path $RunDir 'BRIEF.md'), les fiches $(Join-Path $RunDir 'taches'), les comptes-rendus $(Join-Path $RunDir 'resultats'), puis le travail réel dans $iw
+(« git diff $($State.base)..HEAD --stat », puis les fichiers). REVÉRIFIE TOI-MÊME au moins un fait (un chiffre de verifications.txt, un fichier, une fonction citée dans un compte-rendu) et dis lequel.
+Un critère non prouvé est un critère non rempli ; un test non lancé n'est pas un test réussi. Pas de remarques de style.
+
+Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ni après :
+{ "ok": true ou false, "summary": "ton verdict en deux phrases", "unmet": ["critère non rempli : pourquoi"], "rechecked": "ce que tu as revérifié toi-même" }
+"@
+}
+
+function Invoke-Judge([string]$iw) {
+    $acct = Least-Loaded
+    $pf = Join-Path $RunDir 'juge.prompt.md'
+    Set-Content -LiteralPath $pf (Judge-Prompt $iw) -Encoding utf8
+    $job = Start-ClaudeJob $iw $acct $pf 'opus' 'Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*)'
+    $res = Wait-Job-Spinner $job "le juge (opus, $($acct.Label)) vérifie le résultat contre la demande et les critères…"
+    if ($null -eq $res) { Set-IntProp 'judge' ([pscustomobject]@{ ok = $null; summary = 'jugement annulé'; unmet = @(); rechecked = ''; by = $acct.Short }); Save-State; return }
+    Set-Content -LiteralPath (Join-Path $RunDir 'juge-sortie.txt') "$($res.Out)" -Encoding utf8
+    $j = Parse-ClaudeJson "$($res.Out)"
+    if ($j -and $j.PSObject.Properties['ok']) {
+        Set-IntProp 'judge' ([pscustomobject]@{ ok = [bool]$j.ok; summary = "$($j.summary)"; unmet = @(@($j.unmet) | Where-Object { $_ } | ForEach-Object { "$_" }); rechecked = "$($j.rechecked)"; by = $acct.Short })
+    } else {
+        Set-IntProp 'judge' ([pscustomobject]@{ ok = $null; summary = 'verdict illisible (sortie dans juge-sortie.txt)'; unmet = @(); rechecked = ''; by = $acct.Short })
+        Write-FlowLog "juge : réponse illisible (sortie dans $(Join-Path $RunDir 'juge-sortie.txt'))" 'ERREUR'
+    }
+    Write-Exchange $acct.Id 'tous' 'juge' "verdict du juge : $(if ($State.integration.judge.ok) { 'critères remplis' } elseif ($State.integration.judge.ok -eq $false) { 'critères NON remplis' } else { 'indisponible' }) — $($State.integration.judge.summary)" $acct.Id ''
+    Save-State
+}
+
 function Mode-Integrate {
     $ib = Int-Branch; $iw = Int-Dir
     $log = [Collections.Generic.List[string]]::new()
@@ -2042,7 +2304,10 @@ function Mode-Integrate {
         return 'integrate'
     }
     # vérifications du projet (lint, types, tests, build…) sur la branche d'intégration
-    if (-not @($State.integration.checks).Count) { $State.integration.checks = @(Run-Checks $iw) }
+    if (-not @($State.integration.checks).Count) { $State.integration.checks = @(@(Run-Checks $iw) + @(Protected-Check $iw)) }
+    # mémoire du projet (scribe), puis jugement final (passe complète) : une seule fois par équipe
+    if (-not $State.integration.scribe) { Invoke-Scribe $iw }
+    if (-not $State.integration.judge -and (Judge-On)) { Invoke-Judge $iw }
     $State.status = 'review'; Save-State
     Notify '⚑ Équipe : prêt à valider' "$($merged.Count) tâche(s) fusionnée(s) sur la branche d'intégration."
     'review'
@@ -2320,6 +2585,13 @@ function Mode-Review {
             }
         } else { $L.Add("  $Dm(aucune vérification configurée — F2 dans l'accueil pour le profil du projet)$R") }
         $L.Add('')
+        $jg = $State.integration.judge
+        if ($jg) {
+            $jc = if ($jg.ok) { $Ok } elseif ($jg.ok -eq $false) { $Warn } else { $Dm }
+            $L.Add("  $B Juge$R $Dm($($jg.by))$R  $jc$(if ($jg.ok) { '✓ critères remplis' } elseif ($jg.ok -eq $false) { '⚠ critères NON remplis' } else { '– pas de verdict' })$R  $Dm$(Fit "$($jg.summary)" ($W - 44))$R")
+            foreach ($um in @($jg.unmet | Select-Object -First 3)) { $L.Add("    $Warn• $(Fit "$um" ($W - 8))$R") }
+        }
+        if ("$($State.integration.scribe)" -like 'ok:*') { $L.Add("  $Ok✎ mémoire du projet mise à jour (memoire\)$R $Dm— fichiers dans la livraison$R") }
         if ($changed.Count) { $L.Add("  $B$Teal Résultat$R  $Dm(V pour le lire ici)$R"); foreach ($cf in ($changed | Select-Object -First 6)) { $L.Add("    $Teal📄 $cf$R") }; if ($changed.Count -gt 6) { $L.Add("    $Dm… et $($changed.Count - 6) autre(s)$R") }; $L.Add('') }
         $L.Add("  $B Changements$R")
         foreach ($x in @(Git-In $iw @('diff', '--stat', "$($State.base)..HEAD")) | Select-Object -Last 10) { $L.Add("    $Dm$x$R") }
@@ -2430,6 +2702,12 @@ function Mode-Review {
                     'Livrer maintenant mettrait ce code dans ton projet.') @('O', 'livrer quand même', 'Échap', 'annuler')
                 Cls
                 if ("$($k3.KeyChar)".ToLower() -ne 'o') { continue }
+            }
+            $jg2 = $State.integration.judge
+            if ($jg2 -and $jg2.ok -eq $false) {
+                $k4 = Message-Screen '⚑ ÉQUIPE — le juge n''est pas convaincu' (@("$Warn⚠ $($jg2.summary)$R", '') + @($jg2.unmet | ForEach-Object { "  • $_" }) + @('', 'Livrer maintenant mettrait ce travail dans ton projet.')) @('O', 'livrer quand même', 'Échap', 'annuler')
+                Cls
+                if ("$($k4.KeyChar)".ToLower() -ne 'o') { continue }
             }
             $res = Deliver-Run $dlv $target $cur
             if ($res.Ok) {

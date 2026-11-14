@@ -1,5 +1,14 @@
 # Journal des changements
 
+## Non publié
+
+### Ajouté
+- **Passe légère ou complète** choisie par le planificateur (P pour changer) : la complète fait relire sur 5 angles, contre-vérifier chaque problème grave et juger le résultat.
+- **Contre-vérification** : un autre Claude essaie de réfuter chaque problème signalé en relecture ; seuls les problèmes qui résistent sont renvoyés à l'ouvrier.
+- **Juge final** : verdict sur le résultat (critères, vérifications, un fait revérifié) affiché à la validation ; confirmation avant de livrer s'il n'est pas convaincu.
+- **Garde-fous** transmis à chaque Claude, réglages `guardrails` et `protectedPaths` (vérification « fichiers protégés »).
+- **Mémoire du projet** (`memoire\` : INDEX, état actuel, décisions, pièges, historique) créée avec le CLAUDE.md (touche G) et tenue à jour par un **scribe** à la fin de chaque équipe.
+
 ## 1.1.0 — 13 novembre 2026
 
 ### Ajouté

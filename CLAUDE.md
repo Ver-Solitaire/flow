@@ -46,7 +46,8 @@ PowerShell 7 + une petite application C# (app\FlowApp.cs → FLOW.exe). L'utilis
 8. Écritures JSON : `Write-JsonAtomic` (jamais `Set-Content` sur un fichier d'état).
 9. **Échap ne ferme jamais une fenêtre** (Équipe, sélecteur) : il revient d'un niveau, à la racine il ne fait rien ; un écran qui renvoie `'quit'` = retour (boucle de `flow-team.ps1`). Quitter = Q (sélecteur) ; `tests\navigation.tests.ps1`.
 10. **psmux ne transmet pas la molette aux écrans de FLOW** (elle ouvre son mode copie, même après `unbind`) : pour lire un long texte, l'ouvrir dans une fenêtre psmux à part (`resultat`) où la molette défile ; se placer en haut avec `copy-mode` + `send-keys -X history-top` une fois la fenêtre affichée et l'historique stable.
-11. Une session psmux ouverte garde l'ancien code : `@flow_sig` (`Profile-Sig`) la compare au profil et FLOW propose de la reconstruire ; un panneau déjà lancé (ex. fenêtre Équipe) se recharge avec `respawn-pane -k` puis la commande du rôle.
+11. Les étapes qui lancent un vrai Claude (contre-vérification, scribe, juge) sont coupées quand `$global:FlowNoAi` vaut `$true` (posé par les tests) : sans cela un test lancerait de vrais appels ; `tests\qualite.tests.ps1` remplace `Start-ClaudeJob` par des réponses toutes prêtes.
+12. Une session psmux ouverte garde l'ancien code : `@flow_sig` (`Profile-Sig`) la compare au profil et FLOW propose de la reconstruire ; un panneau déjà lancé (ex. fenêtre Équipe) se recharge avec `respawn-pane -k` puis la commande du rôle.
 
 ## Conventions
 - Français (messages, commentaires, commits). Commits courts : quoi + pourquoi. Une étape = un commit, testée.

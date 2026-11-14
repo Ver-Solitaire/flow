@@ -104,9 +104,101 @@ function New-ClaudeMd {
     if ($style) { $L.Add("- Commits : $style") }
     $L.Add('- Avant de terminer une tâche : lancer les tests et les vérifications ci-dessus, et corriger ce qu''on a cassé.')
     $L.Add('')
+    $L.Add('## Mémoire du projet')
+    $L.Add("- Claude n'a aucune mémoire d'une session à l'autre : tout ce qui doit survivre est écrit dans ${bt}memoire/${bt}. Lis ${bt}memoire/INDEX.md${bt} au début de chaque tâche, puis seulement la fiche du sujet (ou cherche un mot-clé avec Grep dans ${bt}memoire/${bt}).")
+    $L.Add("- À la fin de chaque tâche : mettre à jour la ou les fiches concernées en REMPLAÇANT l'ancien état (pas d'ajout en bas), la date « Mis à jour », et ajouter une ligne à ${bt}memoire/historique.md${bt}. Les pièges rencontrés vont dans ${bt}memoire/pieges.md${bt} (symptôme → cause → parade), les décisions dans ${bt}memoire/decisions.md${bt}. Le code fait foi : une fiche dit où regarder.")
+    $L.Add('')
+    $L.Add('## Garde-fous')
+    $L.Add('- Ne rien mettre en ligne, publier ou envoyer (message, e-mail) sans accord explicite, à chaque fois.')
+    $L.Add('- Ne rien supprimer ni écraser sans avoir compris ce que c''est ; ne jamais commiter ni afficher un secret.')
+    $L.Add('- Ne pas contourner un refus de permission ou un test qui échoue (pas de --no-verify, pas de test désactivé pour « passer »).')
+    $L.Add('- Comptes rendus honnêtes : chiffres exacts des tests ; un test non lancé est « non lancé » ; dire ce qui a été sauté ou laissé ouvert.')
+    $L.Add('- La plus petite modification qui règle complètement le besoin ; réutiliser l''existant avant de créer.')
+    $L.Add('')
     $L.Add('## À savoir')
     $L.Add('- (à compléter : décisions prises et leur raison, pièges connus, choses à ne jamais faire dans ce projet, secrets à ne pas commiter.)')
     $L.Add('')
     Write-TextAtomic -Path $target -Text ($L -join "`n")
+    [void](New-ProjectMemory $Dir)
     $target
+}
+
+function New-ProjectMemory {
+    <# Crée le squelette de mémoire du projet (memoire\ : INDEX, état actuel, décisions, pièges, historique) sans rien écraser.
+       Renvoie la liste des fichiers créés. Les équipes FLOW la tiennent à jour (rôle « scribe ») à la fin de chaque travail. #>
+    param([Parameter(Mandatory)][string]$Dir)
+    $mem = Join-Path $Dir 'memoire'
+    $date = Get-Date -Format 'dd/MM/yyyy'
+    $name = Split-Path $Dir.TrimEnd('\', '/') -Leaf
+    $files = [ordered]@{
+        'INDEX.md'       = @"
+# Mémoire du projet $name — INDEX
+
+Mis à jour : $date
+
+Claude n'a aucune mémoire d'une session à l'autre : tout ce qui doit survivre est écrit ici. **Lis cet INDEX au début de chaque tâche**, puis seulement la fiche du sujet (ou cherche un mot-clé avec Grep dans ce dossier : chaque fiche a une ligne « Mots-clés »).
+
+## Fiches
+| Fiche | Contenu | Mots-clés |
+|---|---|---|
+| [etat-actuel.md](etat-actuel.md) | Ce qui marche, ce qui est en cours, ce qui reste à faire | état, suite, todo |
+| [decisions.md](decisions.md) | Décisions prises (par l'utilisateur ou l'équipe) et leur raison : ne pas les remettre en cause | décisions, choix, règles |
+| [pieges.md](pieges.md) | Erreurs déjà payées : symptôme → cause → parade | pièges, bugs, attention |
+| [historique.md](historique.md) | Une ligne datée par travail terminé, le plus récent en haut | chronologie, versions |
+
+## Règle de mise à jour
+À la fin de chaque tâche : corriger la ou les fiches concernées en **REMPLAÇANT l'ancien état** (pas d'ajout en bas), mettre à jour la date « Mis à jour », ajouter une ligne à ``historique.md``. En cas de contradiction entre deux sources, le fait le plus récent gagne. Le code fait foi : une fiche dit où regarder.
+
+Pour un nouveau sujet qui mérite sa fiche : créer ``<sujet>.md`` (avec « Mots-clés », « État actuel », puis selon le besoin « Décisions », « Pièges », « Où regarder », « Historique ») et ajouter sa ligne au tableau ci-dessus.
+"@
+        'etat-actuel.md' = @"
+# État actuel
+
+Mis à jour : $date · Mots-clés : état, suite, en cours, todo, reste à faire
+
+## État actuel
+(à compléter : ce qui fonctionne, ce qui est en cours, ce qui reste à faire.)
+
+## Où regarder
+- (à compléter : fichiers et dossiers clés.)
+"@
+        'decisions.md'   = @"
+# Décisions
+
+Mis à jour : $date · Mots-clés : décisions, choix, règles, préférences, raison
+
+## État actuel
+Décisions en vigueur (la plus récente prime). Ne pas les remettre en cause sans l'utilisateur.
+
+- (à compléter : « jj/mm — décision — pourquoi ».)
+"@
+        'pieges.md'      = @"
+# Pièges
+
+Mis à jour : $date · Mots-clés : pièges, erreurs, bugs, attention, à ne pas faire
+
+## État actuel
+Erreurs déjà payées une fois. À ajouter dès qu'un problème coûte du temps : **symptôme → cause → parade**.
+
+- (aucun piège noté pour l'instant.)
+"@
+        'historique.md'  = @"
+# Historique
+
+Mis à jour : $date · Mots-clés : chronologie, historique, versions, dates
+
+Une ligne datée par travail terminé, le plus récent en haut.
+
+- $date — création de la mémoire du projet par FLOW.
+"@
+    }
+    $created = @()
+    foreach ($k in $files.Keys) {
+        $p = Join-Path $mem $k
+        if (Test-Path -LiteralPath $p) { continue }
+        New-Item -ItemType Directory -Force $mem | Out-Null
+        Write-TextAtomic -Path $p -Text ([string]$files[$k])
+        $created += $p
+    }
+    $created
 }

@@ -62,6 +62,26 @@ Describe 'New-ClaudeMd' {
         $t | Should -Match 'Branche principale : `main`'
     }
 
+    It 'crée aussi la mémoire du projet (memoire\) et les sections Mémoire et Garde-fous' {
+        $d = New-Proj 'memoire'
+        $t = Get-Content (New-ClaudeMd $d) -Raw -Encoding utf8
+        $t | Should -Match '## Mémoire du projet'
+        $t | Should -Match 'memoire/INDEX.md'
+        $t | Should -Match '## Garde-fous'
+        foreach ($f in 'INDEX.md', 'etat-actuel.md', 'decisions.md', 'pieges.md', 'historique.md') { Test-Path (Join-Path $d "memoire\$f") | Should -BeTrue }
+        (Get-Content (Join-Path $d 'memoire\INDEX.md') -Raw -Encoding utf8) | Should -Match 'REMPLAÇANT l''ancien état'
+    }
+
+    It 'New-ProjectMemory ne remplace jamais une fiche existante et ne recrée que ce qui manque' {
+        $d = New-Proj 'memoire2'
+        New-Item -ItemType Directory -Force (Join-Path $d 'memoire') | Out-Null
+        Set-Content (Join-Path $d 'memoire\pieges.md') 'mes pièges'
+        $made = @(New-ProjectMemory $d)
+        $made.Count | Should -Be 4
+        (Get-Content (Join-Path $d 'memoire\pieges.md') -Raw).Trim() | Should -Be 'mes pièges'
+        @(New-ProjectMemory $d).Count | Should -Be 0
+    }
+
     It 'reconnaît un site statique' {
         $d = New-Proj 'site'
         Set-Content (Join-Path $d 'index.html') '<html></html>'
