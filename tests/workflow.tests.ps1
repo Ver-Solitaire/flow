@@ -267,3 +267,142 @@ Describe 'Proposition au premier lancement' {
         } finally { $global:FlowNoAi = $true }
     }
 }
+
+Describe 'Feuille de route vivante' {
+    BeforeAll {
+        function Read-Action { param([switch]$Wait, [int]$TimeoutMs = 0, [switch]$Wheel) @{ K = (Read-KeyOrHint) } }
+        function Open-Runs { @() }
+        function New-Active([string[]]$Etats = @('à faire', 'à faire', 'à faire')) {
+            [void](New-Project)
+            New-Item -ItemType Directory -Force (Wf-Dir) | Out-Null
+            Set-Content (Wf-File 'CAHIER.md') "# Cahier`n## Vision`nUne API." -Encoding utf8
+            $i = 0
+            Write-Roadmap @($Etats | ForEach-Object { $i++; [pscustomobject]@{ id = "E$i"; titre = "Étape $i"; but = "But $i"; documents = @('src/'); passe = 'complète'; etat = $_ } })
+            Save-WfMeta $true
+            $global:State = [pscustomobject]@{ id = 'T1'; prefix = 'flow/'; base = 'x'; summary = 'faire la 2'; commitTitle = ''; status = 'planning'; updated = ''; prompt = 'p'; depth = 'full'; guided = $false; precisions = ''; step = ''; brief = ''; planner = ''; crossReview = $false; tasks = @(); integration = [pscustomobject]@{ merged = @(); skipped = @(); checks = @() } }
+            $global:RunDir = Join-Path $global:RepoRoot '.flow\runs\T1'; New-Item -ItemType Directory -Force $global:RunDir | Out-Null
+        }
+        function Etat([string]$id) { ((Read-Roadmap).Steps | Where-Object { $_.id -eq $id }).etat }
+        function Journal { $f = Wf-File 'journal.md'; if (Test-Path $f) { Get-Content $f -Raw -Encoding utf8 } else { '' } }
+    }
+
+    It 'une ligne illisible protège le tableau : rien n''est réécrit, donc rien ne disparaît' {
+        New-Active
+        $f = Wf-File 'ROADMAP.md'
+        Add-Content $f "`n| E9 | ligne cassée |" -Encoding utf8
+        $avant = Get-Content $f -Raw -Encoding utf8
+        Set-StepState 'E1' 'fait' | Should -BeFalse
+        Set-StepPass 'E1' 'légère' | Should -BeFalse
+        (Get-Content $f -Raw -Encoding utf8) | Should -Be $avant
+    }
+    It 'un changement garde la version précédente dans ROADMAP.md.bak' {
+        New-Active
+        Set-StepState 'E1' 'fait' | Should -BeTrue
+        Test-Path (Wf-File 'ROADMAP.md.bak') | Should -BeTrue
+        (Get-Content (Wf-File 'ROADMAP.md.bak') -Raw -Encoding utf8) | Should -Match '\| E1 \|.*\| à faire \|'
+    }
+    It 'lancer le plan : l''étape liée passe « en cours », l''état d''avant est retenu, le journal le dit' {
+        New-Active
+        $State.step = 'E2'
+        Step-Begin
+        Etat 'E2' | Should -Be 'en cours'
+        $State.stepPrev | Should -Be 'à faire'
+        $State.stepStarted | Should -BeTrue
+        Journal | Should -Match 'E2 — équipe T1 lancée : faire la 2'
+    }
+    It 'une étape déjà en cours ou faite n''est pas rétrogradée par une deuxième équipe' {
+        New-Active @('en cours', 'fait', 'à faire')
+        $State.step = 'E1'; Step-Begin; Etat 'E1' | Should -Be 'en cours'; $State.stepStarted | Should -BeNullOrEmpty
+        $State.step = 'E2'; Step-Begin; Etat 'E2' | Should -Be 'fait'
+    }
+    It 'équipe jetée : l''étape retrouve son état, mais seulement si elle est encore « en cours »' {
+        New-Active; $State.step = 'E2'; Step-Begin
+        Step-Revert 'jetée'
+        Etat 'E2' | Should -Be 'à faire'
+        Journal | Should -Match 'E2 — équipe T1 jetée'
+        New-Active; $State.step = 'E2'; Step-Begin
+        [void](Set-StepState 'E2' 'fait')                                   # l'utilisateur l'a terminée entre-temps
+        Step-Revert 'jetée'
+        Etat 'E2' | Should -Be 'fait'
+    }
+    It 'équipe sans étape : rien ne change, rien n''est écrit' {
+        New-Active
+        Step-Begin; Step-Revert 'jetée'
+        (Read-Roadmap).Steps.etat | Should -Be @('à faire', 'à faire', 'à faire')
+        Journal | Should -Be ''
+    }
+    It 'après la livraison : « oui » termine l''étape, sinon elle reste en cours' {
+        New-Active; $State.step = 'E2'; Step-Begin
+        $global:KeyQ.Enqueue('o')
+        Ask-StepDone | Should -Be 'fait'
+        Etat 'E2' | Should -Be 'fait'
+        Journal | Should -Match 'terminée après la livraison'
+        New-Active; $State.step = 'E2'; Step-Begin
+        $global:KeyQ.Enqueue('enter')
+        Ask-StepDone | Should -Be 'en cours'
+        Etat 'E2' | Should -Be 'en cours'
+        Journal | Should -Match 'l''étape reste en cours'
+        $State.step = ''; Ask-StepDone | Should -BeNullOrEmpty
+    }
+    It 'le planificateur voit la feuille de route et rattache la demande à une étape ; sans workflow validé, rien' {
+        New-Active
+        $p = Planner-Prompt 'x' ''
+        $p | Should -Match 'Feuille de route du projet'
+        $p | Should -Match 'E2 \[à faire\] Étape 2 : But 2'
+        $p | Should -Match '"etape":'
+        [void](New-Project)
+        $q = Planner-Prompt 'x' ''
+        $q | Should -Not -Match 'Feuille de route du projet'
+        $q | Should -Not -Match '"etape":'
+    }
+    It 'le plan retient l''étape donnée par le planificateur, ignore une étape inventée et garde un choix existant' {
+        New-Active
+        $plan = { param($etape) [pscustomobject]@{ summary = 's'; commitTitle = 't'; brief = 'b'; depth = 'full'; etape = $etape; tasks = @([pscustomobject]@{ id = 'A'; title = 't'; goal = 'g'; files = @('a'); depends = @(); done = 'd'; model = 'sonnet'; why = 'w' }) } }
+        Apply-Plan (& $plan 'e2'); $State.step | Should -Be 'E2'
+        Apply-Plan (& $plan 'E99'); $State.step | Should -Be 'E2'              # étape inconnue : on garde
+        $State.step = ''; Apply-Plan (& $plan 'E99'); $State.step | Should -Be ''
+    }
+    It 'les choix d''étape tournent : aucune, puis chaque étape' {
+        New-Active
+        (Step-Choices) | Should -Be @('', 'E1', 'E2', 'E3')
+        Next-In @(Step-Choices) '' | Should -Be 'E1'
+        Next-In @(Step-Choices) 'E3' | Should -Be ''
+    }
+    It 'le résumé : étapes faites et étape à poursuivre ; rien sans feuille de route' {
+        New-Active @('fait', 'en cours', 'à faire')
+        Roadmap-Summary | Should -Be '1/3 étapes faites · à poursuivre : E2 Étape 2'
+        New-Active @('fait', 'fait', 'fait')
+        Roadmap-Summary | Should -Match 'tout est fait'
+        [void](New-Project); Roadmap-Summary | Should -BeNullOrEmpty
+    }
+    It 'l''écran : S change l''état et le journalise, P change la passe, Échap revient' {
+        New-Active
+        'enter' | Out-Null
+        $global:KeyQ.Enqueue('s'); $global:KeyQ.Enqueue('p'); $global:KeyQ.Enqueue('esc')
+        Mode-Roadmap | Should -Be 'quit'
+        Etat 'E1' | Should -Be 'conception'
+        (Read-Roadmap).Steps[0].passe | Should -Be 'légère'
+        Journal | Should -Match 'E1 — état changé à la main : à faire → conception'
+    }
+    It 'l''écran : les flèches changent d''étape ; avec un tableau à corriger, S ne change rien et le dit' {
+        New-Active
+        $global:KeyQ.Enqueue('down'); $global:KeyQ.Enqueue('s'); $global:KeyQ.Enqueue('esc')
+        function Read-KeyOrHint {
+            $c = if ($global:KeyQ.Count) { $global:KeyQ.Dequeue() } else { 'esc' }
+            if ($c -eq 'esc') { [pscustomobject]@{ Key = 'Escape'; KeyChar = [char]27; Modifiers = 0 } } elseif ($c -eq 'enter') { [pscustomobject]@{ Key = 'Enter'; KeyChar = [char]13; Modifiers = 0 } }
+            elseif ($c -eq 'down') { [pscustomobject]@{ Key = 'DownArrow'; KeyChar = [char]0; Modifiers = 0 } } else { [pscustomobject]@{ Key = $c.ToUpper(); KeyChar = [char]$c; Modifiers = 0 } }
+        }
+        Mode-Roadmap | Should -Be 'quit'
+        Etat 'E2' | Should -Be 'conception'                                  # la flèche a bien choisi la 2e étape
+        Add-Content (Wf-File 'ROADMAP.md') "`n| E9 | cassé |" -Encoding utf8
+        $avant = Get-Content (Wf-File 'ROADMAP.md') -Raw -Encoding utf8
+        $global:KeyQ.Enqueue('s'); $global:KeyQ.Enqueue('esc')
+        Mode-Roadmap | Should -Be 'quit'
+        (Get-Content (Wf-File 'ROADMAP.md') -Raw -Encoding utf8) | Should -Be $avant
+    }
+    It 'sans workflow validé, l''écran l''explique et revient' {
+        [void](New-Project)
+        $global:KeyQ.Enqueue('esc')
+        Mode-Roadmap | Should -Be 'quit'
+    }
+}

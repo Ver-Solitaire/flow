@@ -516,6 +516,7 @@ function Use-Run($st) {
             if ($null -eq $t.($kv[0])) { $t | Add-Member -NotePropertyName $kv[0] -NotePropertyValue $kv[1] -Force }
         }
     }
+    if ($null -eq $st.step) { $st | Add-Member -NotePropertyName step -NotePropertyValue '' -Force }
     if ($null -eq $st.crossReview) { $st | Add-Member -NotePropertyName crossReview -NotePropertyValue (-not $NoReview) -Force }
     $script:State = $st
     $script:RunDir = Join-Path $RepoRoot ".flow\runs\$($st.id)"
@@ -560,6 +561,7 @@ function Planner-Prompt([string]$request, [string]$extra) {
     $more = if ($extra) { "`nPRÉCISION DE L'UTILISATEUR SUR LE PLAN PRÉCÉDENT :`n$extra`n" } else { '' }
     $more += (Profile-Block)
     $more += (Cahier-Block)
+    $more += (Roadmap-Prompt-Block)
     if ("$($State.precisions)".Trim()) { $more += "`nRÉPONSES DE L'UTILISATEUR À TES QUESTIONS (elles font foi : respecte-les dans le brief et les tâches) :`n$($State.precisions)`n" }
     if ($State.guided) { $more += "`nMODE GUIDÉ : l'utilisateur veut décider des choix importants. Dans « questions » (0 à 5), liste les VRAIES décisions de conception encore ouvertes après ses réponses (même format que ci-dessous, la réponse recommandée en premier) ; dans le plan, prends l'option recommandée. Liste vide si tout est tranché.`n" }
     @"
@@ -611,6 +613,7 @@ $(Conventions-Text)
   "brief": "brief commun, en Markdown",
   "depth": "light | full",
 $(if ($State.guided) { '  "questions": [ { "question": "décision à trancher", "why": "pourquoi elle compte", "options": ["recommandée", "autre"] } ],' })
+$(if (Roadmap-Active) { '  "etape": "identifiant de l''étape de la feuille de route concernée, ou vide",' })
   "tasks": [
     { "id": "A", "title": "titre court", "goal": "ce qu'il faut faire, précisément",
       "files": ["chemins relatifs des fichiers à créer ou modifier"], "depends": [], "done": "critères de fin vérifiables",
@@ -1211,6 +1214,8 @@ function Read-Prompt([string]$initial) {
         $L = [Collections.Generic.List[string]]::new()
         $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — nouvelle demande' 0.1)   $B$(Split-Path $RepoRoot -Leaf)$R  $Dm$RepoRoot$R")
         $L.Add((Stepper 1)); $L.Add((Now 'décris ce que tu veux, puis appuie sur F5 pour l''envoyer'))
+        $rm = Roadmap-Summary
+        if ($rm) { $L.Add("  $Teal▦ Feuille de route : $rm$R $Dm· F9 pour la voir$R") }
         $L.Add("  $(Accounts-Line)")
         $miss = @(Missing-Accounts)
         if ($miss.Count -and $Accs.Count -gt 1) { $L.Add("  $Warn⚠ $(($miss.Label) -join ', ') : non connecté — F4 pour le connecter (sinon tout part sur les autres comptes)$R") }
@@ -1235,7 +1240,7 @@ function Read-Prompt([string]$initial) {
         }
         $L.Add("  $bc╰$('─' * ($W - 5))╯$R")
         $L.Add("  $B$Teal▶ F5 ou Ctrl+D = ENVOYER la demande à l'équipe$R  $Dm(Entrée = nouvelle ligne)$R$(if ($lines.Count -and ($lines -join '').Trim()) { "  $Warn← pas encore envoyée$R" })")
-        $L.Add((Keys @('F5 / Ctrl+D', 'envoyer', 'Entrée', 'nouvelle ligne', 'F2', 'profil du projet', 'F3', 'changer de projet', 'F4', 'comptes', 'F6', 'plans en attente', 'F7', 'mode guidé', 'F8', 'mémoire')))
+        $L.Add((Keys @('F5 / Ctrl+D', 'envoyer', 'Entrée', 'nouvelle ligne', 'F2', 'profil du projet', 'F3', 'changer de projet', 'F4', 'comptes', 'F6', 'plans en attente', 'F7', 'mode guidé', 'F8', 'mémoire', 'F9', 'feuille de route')))
         Show-Frame $L
         $k = (Read-KeyOrHint)
         $ctrl = [bool]($k.Modifiers -band [ConsoleModifiers]::Control)
@@ -1245,6 +1250,7 @@ function Read-Prompt([string]$initial) {
         if ($k.Key -eq 'F4') { [void](Connect-Missing); continue }
         if ($k.Key -eq 'F6') { return '::home' }
         if ($k.Key -eq 'F8') { return '::memoire' }
+        if ($k.Key -eq 'F9') { return '::roadmap' }
         if ($k.Key -eq 'F7') { $global:FlowGuided = -not $global:FlowGuided; Save-GuidedPref $global:FlowGuided; continue }
         if ($k.Key -eq 'F5' -or ($ctrl -and $k.Key -eq 'D')) {
             $t = ($lines -join "`n").Trim()
@@ -1494,6 +1500,7 @@ function Mode-Home {
     if ($req -eq '::project') { return 'project' }
     if ($req -eq '::home') { return 'home' }
     if ($req -eq '::memoire') { return 'memoire' }
+    if ($req -eq '::roadmap') { return 'roadmap' }
 
     # point de départ : la branche cible du profil, sinon le dernier commit de la branche actuelle
     $baseRef = if ($Cfg.targetBranch) { [string]$Cfg.targetBranch } else { 'HEAD' }
@@ -1517,7 +1524,7 @@ function Mode-Home {
         base = (Git-In $RepoRoot @('rev-parse', $baseRef) | Select-Object -First 1).Trim()
         baseBranch = $(if ($Cfg.targetBranch) { [string]$Cfg.targetBranch } else { (Git-In $RepoRoot @('rev-parse', '--abbrev-ref', 'HEAD') | Select-Object -First 1).Trim() })
         prefix = [string]$Cfg.branchPrefix; deliver = [string]$Cfg.deliver; commitTitle = ''
-        summary = ''; brief = ''; planner = ''; depth = 'full'; guided = [bool]$global:FlowGuided; precisions = ''; tasks = @(); crossReview = (-not $NoReview)
+        summary = ''; brief = ''; planner = ''; depth = 'full'; guided = [bool]$global:FlowGuided; precisions = ''; step = ''; tasks = @(); crossReview = (-not $NoReview)
         integration = [pscustomobject]@{ merged = @(); skipped = @(); conflict = ''; tests = $null; checks = @(); delivered = '' }
     }
     Use-Run $st
@@ -1680,6 +1687,8 @@ function Apply-Plan($plan) {
     $State.summary = if ($plan.summary) { [string]$plan.summary } else { ($State.prompt -split "`n")[0] }
     $State.commitTitle = if ($plan.commitTitle) { [string]$plan.commitTitle } else { '' }
     $State.brief = [string]$plan.brief
+    $planStep = Valid-StepId "$($plan.etape)"
+    if ($planStep) { $State | Add-Member -NotePropertyName step -NotePropertyValue $planStep -Force }
     $State.depth = if ("$($plan.depth)".Trim().ToLower() -eq 'light') { 'light' } else { 'full' }
     $State.tasks = $tasks
     try { [void](Topo $tasks) } catch { foreach ($t in $tasks) { $t.depends = @() } }
@@ -1740,10 +1749,14 @@ function Mode-Plan {
             $L.Add("  $Warn⚠ $(($miss.Label) -join ', ') : non connecté$(if ($onMiss.Count) { " — tâche(s) $(($onMiss.id) -join ', ') à réattribuer" } else { ' — tout est réparti sur les comptes connectés' }) · C pour le connecter$R")
         }
         $L.Add("  $Dm relecture croisée : $(if ($State.crossReview) { 'activée — chaque tâche finie est relue par un Claude d''un autre compte avant la fusion' } else { 'désactivée' }) · V pour changer$R")
+        if (Roadmap-Active) {
+            $stp = @((Read-Roadmap).Steps | Where-Object { $_.id -ieq "$($State.step)" })
+            $L.Add("  $Dm étape de la feuille de route : $B$(if ($stp.Count) { "$($stp[0].id) — $($stp[0].titre)" } else { 'aucune' })$R$Dm · T pour changer$R")
+        }
         $L.Add("  $Dm passe : $B$(Depth-Label)$R$Dm — $(if ((Depth) -eq 'light') { 'relecture sur 2 angles, sans contre-vérification ni juge final' } else { 'relecture sur 5 angles, contre-vérification de chaque défaut, juge final' }) · P pour changer$R")
         if ($autoAt) { $L.Add("  $Teal$B⏱ lancement automatique dans $([int][Math]::Max(0, [Math]::Ceiling(($autoAt - (Get-Date)).TotalSeconds))) s$R $Dm— appuie sur une touche pour garder la main et modifier le plan$R") }
         $L.Add('')
-        $L.Add((Keys @('Entrée', 'lancer l''équipe', 'Tab', 'compte', 'M', 'modèle', 'A', 'répartir', 'C', 'comptes', 'E', 'modifier le plan', 'R', 'replanifier', 'P', 'passe', 'X', 'abandonner', 'Échap', 'retour')))
+        $L.Add((Keys @('Entrée', 'lancer l''équipe', 'Tab', 'compte', 'M', 'modèle', 'A', 'répartir', 'C', 'comptes', 'E', 'modifier le plan', 'R', 'replanifier', 'P', 'passe', 'T', 'étape', 'X', 'abandonner', 'Échap', 'retour')))
         $L.Add("  $Dm clic : choisir une tâche · clic sur ◆ compte ou ◇ modèle : le changer$R")
         Show-Frame $L
         foreach ($pz in $planZones) {
@@ -1778,6 +1791,7 @@ function Mode-Plan {
         elseif ($ch -eq 'a') { Assign-Accounts $ts; Save-State }
         elseif ($ch -eq 'v') { $State.crossReview = -not $State.crossReview; Save-State; Write-Event 'plan_reglage' @{ reglage = 'relecture'; vers = [bool]$State.crossReview } }
         elseif ($ch -eq 'p') { $State.depth = if ((Depth) -eq 'light') { 'full' } else { 'light' }; Save-State; Write-Event 'plan_reglage' @{ reglage = 'passe'; vers = (Depth) } }
+        elseif ($ch -eq 't' -and (Roadmap-Active)) { $State | Add-Member -NotePropertyName step -NotePropertyValue (Next-In @(Step-Choices) "$($State.step)") -Force; Save-State }
         elseif ($ch -eq 'c') {
             if (-not @(Missing-Accounts).Count) { [void](Message-Screen '⚑ ÉQUIPE — comptes' @("$Ok Tous les comptes sont connectés :$R $(Accounts-Line)") @('Entrée', 'retour')) }
             elseif ((Connect-Missing) -gt 0) { Assign-Accounts $ts; Save-State }   # un compte de plus : nouvelle répartition
@@ -1797,7 +1811,9 @@ function Mode-Plan {
                 Cls; continue
             }
             Write-TaskFiles
-            $State.status = 'running'; Save-State
+            $State.status = 'running'
+            Step-Begin
+            Save-State
             Write-Event 'plan_valide' @{ modifications = @(Plan-Changes); passe = (Depth); relecture = [bool]$State.crossReview; taches = @($State.tasks).Count; guide = [bool]$State.guided }
             return 'run'
         }
@@ -2381,7 +2397,7 @@ function Mode-Run {
             elseif ($ch -eq 'x') {
                 $go = Confirm-Discard '⚑ ÉQUIPE — abandonner l''équipe ?'
                 Cls
-                if ($go) { Write-Event 'equipe_abandonnee' @{ resume = $State.summary }; $arch = @(Cleanup-Run -Abandon); $State.status = 'discarded'; Save-State; Show-Archive $arch; return 'home' }
+                if ($go) { Write-Event 'equipe_abandonnee' @{ resume = $State.summary }; Step-Revert 'abandonnée'; $arch = @(Cleanup-Run -Abandon); $State.status = 'discarded'; Save-State; Show-Archive $arch; return 'home' }
             }
         }
     }
@@ -3082,7 +3098,10 @@ function Mode-Review {
                 $State.status = 'merged'; $State.integration.delivered = $res.Info; Save-State
                 Write-Event 'livraison' @{ mode = $dlv; titre = (Final-Title); fusionnees = @($merged); laissees = @($skipped); verifications = @(@($State.integration.checks) | ForEach-Object { @{ nom = $_.name; ok = [bool]$_.ok } }); juge = $(if ($State.integration.judge) { $State.integration.judge.ok } else { $null }); guide = [bool]$State.guided }
                 Log-Quota 'fin'
+                $stepNow = $State.step
                 [void](Message-Screen '⚑ ÉQUIPE — livré' (@("$Ok✓ $($res.Info)$R", '', "$B Où trouver le résultat :$R") + @($changed | Select-Object -First 6 | ForEach-Object { "   $Teal📄 $(Join-Path $RepoRoot $_)$R" }) + @('', "$Dm Copies de travail et branches temporaires supprimées ; l'historique reste dans $RunDir.$R") + @(Archive-Lines $res.Archive)) @('Entrée', 'nouvelle demande'))
+                $stepRes = Ask-StepDone
+                if ($stepRes) { Write-Event 'etape_livraison' @{ etape = $stepNow; resultat = $stepRes } }
                 [void](Update-Profile)
                 return 'home'
             }
@@ -3091,7 +3110,7 @@ function Mode-Review {
         elseif ($ch -eq 'j') {
             $go = Confirm-Discard '⚑ ÉQUIPE — jeter le travail de l''équipe ?'
             Cls
-            if ($go) { Write-Event 'jete' @{ resume = $State.summary; juge = $(if ($State.integration.judge) { $State.integration.judge.ok } else { $null }) }; $arch = @(Cleanup-Run -Abandon); $State.status = 'discarded'; Save-State; Show-Archive $arch; [void](Update-Profile); return 'home' }
+            if ($go) { Step-Revert 'jetée'; Write-Event 'jete' @{ resume = $State.summary; juge = $(if ($State.integration.judge) { $State.integration.judge.ok } else { $null }) }; $arch = @(Cleanup-Run -Abandon); $State.status = 'discarded'; Save-State; Show-Archive $arch; [void](Update-Profile); return 'home' }
         }
     }
 }
@@ -3117,11 +3136,12 @@ try {
                 'integrate' { Mode-Integrate }
                 'review'    { Mode-Review }
                 'memoire'   { Mode-Memory }
+                'roadmap'   { Mode-Roadmap }
                 default     { 'quit' }
             }
             if ($mode -eq 'quit') {
                 $mode = if ($Nav.Count) { $b = $Nav[$Nav.Count - 1]; $Nav.RemoveAt($Nav.Count - 1); $b } elseif ($cur -eq 'setup') { 'setup' } else { 'home' }
-            } elseif ($mode -ne $cur -and $cur -in 'home', 'profile', 'project' -and $mode -in 'home', 'profile', 'project', 'memoire', 'plan', 'run', 'review', 'integrate') {
+            } elseif ($mode -ne $cur -and $cur -in 'home', 'profile', 'project' -and $mode -in 'home', 'profile', 'project', 'memoire', 'roadmap', 'plan', 'run', 'review', 'integrate') {
                 if (-not $Nav.Count -or $Nav[$Nav.Count - 1] -ne $cur) { $Nav.Add($cur); if ($Nav.Count -gt 8) { $Nav.RemoveAt(0) } }
             }
         } catch {

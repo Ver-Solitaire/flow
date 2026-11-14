@@ -71,7 +71,7 @@ function ConvertTo-Roadmap($steps, [string]$name) {
     }
     $L.Add('')
     $L.Add("États : $($WfStates -join ' · ') · Passes : $($WfPasses -join ' · ') (légère = relecture réduite, complète = relecture sur 5 angles, contre-vérification et juge)")
-    $L -join "`n"
+    ($L -join "`n") + "`n"
 }
 
 function Read-Roadmap {
@@ -79,20 +79,33 @@ function Read-Roadmap {
     if (-not (Test-Path -LiteralPath $f)) { return [pscustomobject]@{ Steps = @(); Errors = @('ROADMAP.md absent') } }
     ConvertFrom-Roadmap (Get-Content -LiteralPath $f -Raw -Encoding utf8)
 }
-function Write-Roadmap($steps) {
+function Write-Roadmap($steps, [switch]$Backup) {
     New-Item -ItemType Directory -Force (Wf-Dir) | Out-Null
-    Write-TextAtomic -Path (Wf-File 'ROADMAP.md') -Text (ConvertTo-Roadmap $steps (Split-Path $RepoRoot -Leaf))
+    Write-TextAtomic -Path (Wf-File 'ROADMAP.md') -Text (ConvertTo-Roadmap $steps (Split-Path $RepoRoot -Leaf)) -Backup:$Backup
 }
-function Set-StepState([string]$id, [string]$state) {
-    # change l'état d'une étape ; renvoie $false si l'étape ou l'état n'existe pas
-    if ($state -notin $WfStates) { return $false }
+function Update-Step([string]$id, [scriptblock]$change) {
+    # modifie une étape et réécrit le tableau. Refuse (et ne touche à rien) si ROADMAP.md contient une ligne que FLOW n'a pas pu relire :
+    # la réécrire la ferait disparaître. La version précédente est gardée dans ROADMAP.md.bak.
     $road = Read-Roadmap
+    if ($road.Errors.Count) { return $false }
     $s = @($road.Steps | Where-Object { $_.id -ieq $id })
     if (-not $s.Count) { return $false }
-    $s[0].etat = $state
-    Write-Roadmap $road.Steps
+    & $change $s[0]
+    Write-Roadmap $road.Steps -Backup
     $true
 }
+function Set-StepState([string]$id, [string]$state) {
+    # change l'état d'une étape ; renvoie $false si l'étape ou l'état n'existe pas, ou si le tableau est à corriger
+    if ($state -notin $WfStates) { return $false }
+    $change = { param($st) $st.etat = $state }.GetNewClosure()
+    Update-Step $id $change
+}
+function Set-StepPass([string]$id, [string]$pass) {
+    if ($pass -notin $WfPasses) { return $false }
+    $change = { param($st) $st.passe = $pass }.GetNewClosure()
+    Update-Step $id $change
+}
+function Next-In([string[]]$list, [string]$cur) { $i = [array]::IndexOf($list, $cur); $list[($i + 1) % $list.Count] }
 function Current-Step {
     # l'étape à poursuivre : en cours, sinon en conception, sinon la première à faire
     $st = @((Read-Roadmap).Steps)
@@ -339,4 +352,150 @@ function Invoke-WorkflowCreation {
 function Workflow-Offer-Due {
     # proposer la création : projet sans workflow, pas refusé, pas déjà proposé dans cette session
     [bool]($RepoRoot -and -not (Wf-Exists) -and -not ($Cfg -and $Cfg.workflowDeclined -eq $true) -and -not $global:FlowWfOffered -and -not $global:FlowNoAi)
+}
+
+# ───────────────────────── la feuille de route vivante ─────────────────────────
+function Roadmap-Active { [bool]($RepoRoot -and (Wf-Validated) -and @((Read-Roadmap).Steps).Count) }
+
+function Wf-Journal([string]$text) {
+    # journal daté du projet : une ligne par événement important (étape lancée, livrée, terminée…) ; ne gêne jamais l'équipe
+    if (-not (Wf-Validated)) { return }
+    try { Add-Content -LiteralPath (Wf-File 'journal.md') -Value "- $(Get-Date -Format 'dd/MM/yyyy HH:mm') — $(("$text" -replace '\s+', ' ').Trim())" -Encoding utf8 } catch {}
+}
+
+function Roadmap-Summary {
+    # « 3/7 étapes faites · en cours : E4 Titre » ; $null sans feuille de route
+    if (-not (Roadmap-Active)) { return $null }
+    $steps = @((Read-Roadmap).Steps)
+    $done = @($steps | Where-Object { $_.etat -eq 'fait' }).Count
+    $cur = Current-Step
+    "$done/$($steps.Count) étapes faites$(if ($cur) { " · à poursuivre : $($cur.id) $($cur.titre)" } else { ' · tout est fait' })"
+}
+
+function Roadmap-Prompt-Block {
+    # pour le planificateur : la feuille de route, pour qu'il rattache la demande à une étape
+    if (-not (Roadmap-Active)) { return '' }
+    $lines = @((Read-Roadmap).Steps | ForEach-Object { "- $($_.id) [$($_.etat)] $($_.titre) : $($_.but)" })
+    "`n## Feuille de route du projet (.flow\workflow\ROADMAP.md)`n$($lines -join "`n")`nSi la demande de l'utilisateur correspond à UNE de ces étapes, donne son identifiant dans `"etape`" ; sinon laisse-le vide. N'invente aucune étape.`n"
+}
+
+function Valid-StepId([string]$id) {
+    if (-not "$id".Trim() -or -not (Roadmap-Active)) { return '' }
+    $s = @((Read-Roadmap).Steps | Where-Object { $_.id -ieq "$id".Trim() })
+    if ($s.Count) { $s[0].id } else { '' }
+}
+
+function Step-Choices { @('') + @((Read-Roadmap).Steps | ForEach-Object { $_.id }) }
+
+function Step-Begin {
+    # le plan est validé : l'étape liée passe « en cours » (l'état d'avant est gardé pour pouvoir revenir en arrière)
+    if (-not $State -or -not "$($State.step)".Trim()) { return }
+    $id = "$($State.step)"
+    $road = Read-Roadmap
+    $s = @($road.Steps | Where-Object { $_.id -ieq $id })
+    if (-not $s.Count -or $road.Errors.Count) { return }
+    $State | Add-Member -NotePropertyName stepPrev -NotePropertyValue $s[0].etat -Force
+    if ($s[0].etat -in 'à faire', 'conception', 'bloquée') {
+        if (Set-StepState $id 'en cours') { $State | Add-Member -NotePropertyName stepStarted -NotePropertyValue $true -Force }
+    }
+    Wf-Journal "$id — équipe $($State.id) lancée : $($State.summary)"
+}
+
+function Step-Revert([string]$why) {
+    # l'équipe est abandonnée ou jetée : l'étape retrouve son état d'avant, si c'est encore elle qui l'a fait passer « en cours »
+    if (-not $State -or -not "$($State.step)".Trim()) { return }
+    $id = "$($State.step)"
+    $s = @((Read-Roadmap).Steps | Where-Object { $_.id -ieq $id })
+    if ($s.Count -and $State.stepStarted -eq $true -and $s[0].etat -eq 'en cours' -and "$($State.stepPrev)") { [void](Set-StepState $id "$($State.stepPrev)") }
+    Wf-Journal "$id — équipe $($State.id) $why : $($State.summary)"
+}
+
+function Ask-StepDone {
+    # après une livraison : l'étape est-elle terminée ? Réponse « oui » seulement par un choix explicite ; sinon elle reste en cours.
+    if (-not $State -or -not "$($State.step)".Trim() -or -not (Roadmap-Active)) { return $null }
+    $id = "$($State.step)"
+    $s = @((Read-Roadmap).Steps | Where-Object { $_.id -ieq $id })
+    if (-not $s.Count) { return $null }
+    $k = Message-Screen '⚑ FEUILLE DE ROUTE — étape terminée ?' @("Cette équipe travaillait sur l'étape $B$($s[0].id)$R — $($s[0].titre).", "$Dm But : $($s[0].but)$R", '', 'Après cette livraison, l''étape est-elle terminée ?') @('O', 'oui : l''étape est faite', 'Entrée', 'pas encore, elle reste en cours')
+    if ("$($k.KeyChar)".ToLower() -eq 'o') {
+        if (Set-StepState $id 'fait') { Wf-Journal "$id — terminée après la livraison de l'équipe $($State.id) : $($State.summary)"; return 'fait' }
+        return $null
+    }
+    Wf-Journal "$id — livraison de l'équipe $($State.id) (l'étape reste en cours) : $($State.summary)"
+    'en cours'
+}
+
+function Step-Icon([string]$etat) {
+    switch ($etat) { 'fait' { "$Ok✓$R" } 'en cours' { "$Warn▶$R" } 'conception' { "$Info✎$R" } 'bloquée' { "$Err■$R" } default { "$Dm○$R" } }
+}
+
+function Mode-Roadmap {
+    # l'avancement du projet : étapes, états, équipes en cours, journal ; S change l'état, P la passe, E modifie, J lit le journal
+    $sel = 0; $msg = ''
+    Cls
+    while ($true) {
+        $W = [Math]::Max(40, (ConW) - 1)
+        $road = Read-Roadmap; $steps = @($road.Steps)
+        if ($sel -ge $steps.Count) { $sel = [Math]::Max(0, $steps.Count - 1) }
+        $L = [Collections.Generic.List[string]]::new()
+        $L.Add(''); $L.Add("  $(Grad '⚑ FEUILLE DE ROUTE' 0.1)   $B$(Split-Path $RepoRoot -Leaf)$R")
+        if (-not (Wf-Validated)) {
+            $L.Add("  $Warn Pas de workflow validé pour ce projet : crée-le avec W dans le profil du projet (F2).$R")
+            $L.Add(''); $L.Add((Keys @('Échap', 'retour')))
+            Show-Frame $L; $k = Read-KeyOrHint
+            if ($k.Key -eq 'Escape') { return 'quit' }
+            continue
+        }
+        $done = @($steps | Where-Object { $_.etat -eq 'fait' }).Count
+        $bar = if ($steps.Count) { $n = [int][Math]::Round(20 * $done / $steps.Count); "$Ok$('█' * $n)$R$Dm$('░' * (20 - $n))$R" } else { '' }
+        $L.Add("  $bar  $B$done$R sur $($steps.Count) étape(s) faites")
+        $L.Add($(if ($road.Errors.Count) { "  $Warn⚠ ROADMAP.md a $($road.Errors.Count) ligne(s) à corriger (E pour la modifier) : FLOW ne change rien tant que ce n'est pas réglé.$R" } else { (Now 'S change l''état de l''étape choisie · P sa passe · J lit le journal') }))
+        $L.Add('')
+        $teams = @(Open-Runs)
+        $rows = @()
+        for ($i = 0; $i -lt $steps.Count; $i++) {
+            $st = $steps[$i]
+            $mark = if ($i -eq $sel) { "$(PalC 0.1)$B▸$R" } else { ' ' }
+            $eq = @($teams | Where-Object { "$($_.step)" -ieq $st.id }).Count
+            $rows += @{ Y = $L.Count; Row = $i }
+            $L.Add("  $mark $(Step-Icon $st.etat) $B$($st.id)$R  $(Fit $st.titre ($W - 44))  $Dm$($st.passe)$R  $($st.etat)$(if ($eq) { "  $Info⚑ $eq équipe(s)$R" })")
+        }
+        if ($steps.Count) {
+            $cur = $steps[$sel]
+            $L.Add('')
+            foreach ($x in @(Chunks "But : $($cur.but)" ($W - 8)) | Select-Object -First 3) { $L.Add("    $x") }
+            if (@($cur.documents).Count) { $L.Add("    $Dm à lire : $(@($cur.documents) -join ', ')$R") }
+            foreach ($tm in @($teams | Where-Object { "$($_.step)" -ieq $cur.id })) { $L.Add("    $Info⚑ équipe $($tm.id) · $($tm.status) · $(@($tm.tasks).Count) tâche(s) : $($tm.summary)$R") }
+        }
+        $jf = Wf-File 'journal.md'
+        if (Test-Path -LiteralPath $jf) {
+            $L.Add(''); $L.Add("  $B Journal$R $Dm(derniers événements)$R")
+            foreach ($j in @(Get-Content -LiteralPath $jf -Encoding utf8 -Tail 5)) { $L.Add("    $Dm$(Fit $j ($W - 8))$R") }
+        }
+        $L.Add('')
+        $L.Add((Keys @('↑↓', 'choisir', 'S', 'état suivant', 'P', 'passe', 'E', 'modifier', 'J', 'lire le journal', 'Échap', 'retour')))
+        if ($msg) { $L.Add("  $msg") }
+        Show-Frame $L
+        foreach ($rw in $rows) { Add-Zone $rw.Y $rw.Y 0 999 @{ Row = $rw.Row } }
+        $act = Read-Action -Wait
+        if ($act.Click) { $sel = $act.Click.Row; $msg = ''; continue }
+        $k = $act.K; if (-not $k) { continue }
+        $ch = "$($k.KeyChar)".ToLower()
+        if ($k.Key -eq 'Escape') { return 'quit' }
+        elseif ($k.Key -eq 'UpArrow' -and $steps.Count) { $sel = ($sel - 1 + $steps.Count) % $steps.Count; $msg = '' }
+        elseif ($k.Key -eq 'DownArrow' -and $steps.Count) { $sel = ($sel + 1) % $steps.Count; $msg = '' }
+        elseif ($ch -eq 's' -and $steps.Count) {
+            $to = Next-In $WfStates $steps[$sel].etat
+            if (Set-StepState $steps[$sel].id $to) { Wf-Journal "$($steps[$sel].id) — état changé à la main : $($steps[$sel].etat) → $to"; Write-Event 'etape_etat' @{ etape = $steps[$sel].id; de = $steps[$sel].etat; vers = $to }; $msg = "$Ok✓ $($steps[$sel].id) : $to$R" }
+            else { $msg = "$Err✗ ROADMAP.md est à corriger d'abord (E)$R" }
+        }
+        elseif ($ch -eq 'p' -and $steps.Count) {
+            $to = Next-In $WfPasses $steps[$sel].passe
+            $msg = if (Set-StepPass $steps[$sel].id $to) { "$Ok✓ $($steps[$sel].id) : passe $to$R" } else { "$Err✗ ROADMAP.md est à corriger d'abord (E)$R" }
+        }
+        elseif ($ch -eq 'e') { Start-Process notepad.exe -ArgumentList "`"$(Wf-File 'ROADMAP.md')`"" -Wait; $msg = "$Ok✓ feuille de route relue$R"; Cls }
+        elseif ($ch -eq 'j') {
+            if (Test-Path -LiteralPath $jf) { Open-TextWindow 'journal' @(Get-Content -LiteralPath $jf -Encoding utf8); $msg = "$Dm journal ouvert dans la fenêtre « journal » (q puis une touche pour la fermer)$R" } else { $msg = "$Dm pas encore de journal$R" }
+        }
+    }
 }
