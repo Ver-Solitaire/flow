@@ -38,8 +38,8 @@ $loaded = Get-Module Pester
 if (-not (Select-DepVersion @("$($loaded.Version)") $dep)) { throw "Pester $($loaded.Version) chargé, mais FLOW demande la série $($dep.min) à $($dep.max) (dependances.json)" }
 Write-Host "Pester $($loaded.Version)" -ForegroundColor DarkGray
 
-$cfg = New-PesterConfiguration
-$cfg.Run.Path = $here
-$cfg.Run.Exit = $true
-$cfg.Output.Verbosity = if ($Detail) { 'Detailed' } else { 'Normal' }
-Invoke-Pester -Configuration $cfg
+$pesterCfg = New-PesterConfiguration
+$pesterCfg.Run.Path = $here
+$pesterCfg.Run.Exit = $true
+$pesterCfg.Output.Verbosity = if ($Detail) { 'Detailed' } else { 'Normal' }
+Invoke-Pester -Configuration $pesterCfg

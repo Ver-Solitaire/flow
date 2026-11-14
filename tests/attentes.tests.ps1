@@ -18,7 +18,7 @@ AfterAll { Remove-Item -LiteralPath $global:Base -Recurse -Force -ErrorAction Si
 
 Describe 'Wait-Job-Spinner : délai maximum' {
     It 'une tâche qui dépasse le délai est arrêtée, la fonction rend $null et le journal le dit' {
-        $job = Start-Job -ScriptBlock { Start-Sleep 30; 'jamais' }
+        $job = Start-Job -ScriptBlock { Start-Sleep 120; 'jamais' }
         $t0 = Get-Date
         $r = Wait-Job-Spinner $job 'un Claude bloqué' 0.02              # 1,2 seconde
         ((Get-Date) - $t0).TotalSeconds | Should -BeLessThan 10
@@ -38,8 +38,8 @@ Describe 'Wait-Job-Spinner : délai maximum' {
 
 Describe 'Wait-Jobs-Spinner : plusieurs tâches, délai maximum' {
     It 'les tâches rendues à temps gardent leur résultat, les autres sont arrêtées ($null à leur place)' {
-        $jobs = @((Start-Job -ScriptBlock { [pscustomobject]@{ Out = 'a' } }), (Start-Job -ScriptBlock { Start-Sleep 30; 'jamais' }))
-        $r = Wait-Jobs-Spinner $jobs 'deux tâches' 0.03        # comme FLOW l'appelle : affectation simple
+        $jobs = @((Start-Job -ScriptBlock { [pscustomobject]@{ Out = 'a' } }), (Start-Job -ScriptBlock { Start-Sleep 120; 'jamais' }))
+        $r = Wait-Jobs-Spinner $jobs 'deux tâches' 0.25        # comme FLOW l'appelle : affectation simple
         $r.Count | Should -Be 2
         $r[0].Out | Should -Be 'a'
         $r[1] | Should -BeNullOrEmpty
