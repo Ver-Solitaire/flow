@@ -179,7 +179,7 @@ function Check-Consistency {
         if ($miss.Count) { $out += Finding 'incoherence' 'haute' "Le cahier protège des données que le profil ne protège pas : $($miss -join ', ')" 'le profil (.flow\config.json) est ce que lisent les hooks et les vérifications : sans lui, rien n''empêche de les modifier' @([pscustomobject]@{ file = '.flow\workflow\CAHIER.md'; line = 0; text = ($miss -join ', ') }) "prot|$($miss -join ',')" @('x', 'o', 'i') }
     }
     $road = Read-Roadmap
-    foreach ($st in @($road.Steps)) {
+    foreach ($st in @($road.Steps | Where-Object { $_.etat -in 'fait', 'en cours' })) {     # une étape pas encore faite cite souvent des documents qu'elle créera elle-même
         foreach ($doc in @($st.documents)) {
             $p = (($doc -replace '/', '\').Trim().TrimEnd('\'))
             if ($p -match '[\*\?<>]|^[A-Za-z]:' -or -not $p) { continue }

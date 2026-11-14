@@ -136,13 +136,23 @@ Describe 'INDEX, fraîcheur, cohérence' {
     It 'cahier ≠ profil : des données protégées dans le cahier mais pas dans le profil' {
         [void](New-TriProject)
         Put '.flow\workflow\CAHIER.md' "# Cahier`n## Données à protéger`n- data/prod`n- secrets`n`n## Critère de réussite`nTout passe."
-        Write-Roadmap @([pscustomobject]@{ id = 'E1'; titre = 't'; but = 'b'; documents = @('src/app.js', 'docs/absent.md'); passe = 'complète'; etat = 'à faire' })
+        Write-Roadmap @([pscustomobject]@{ id = 'E1'; titre = 't'; but = 'b'; documents = @('src/app.js', 'docs/absent.md'); passe = 'complète'; etat = 'fait' })
         $Cfg.protectedPaths = @('secrets')
         $f = @(Check-Consistency)
         $inc = $f | Where-Object { $_.type -eq 'incoherence' }
         $inc.titre | Should -Match 'data/prod'
         $inc.titre | Should -Not -Match 'secrets'
         ($f | Where-Object { $_.type -eq 'ref-morte' }).titre | Should -Match 'docs/absent.md'
+    }
+}
+
+Describe 'Étapes pas encore faites' {
+    It 'une étape à faire peut citer des documents qu''elle créera : pas de référence morte (projet neuf)' {
+        [void](New-TriProject)
+        Write-Roadmap @([pscustomobject]@{ id = 'E1'; titre = 't'; but = 'b'; documents = @('src/', 'tests/', 'CLAUDE.md'); passe = 'complète'; etat = 'à faire' })
+        @(Check-Consistency | Where-Object { $_.type -eq 'ref-morte' }).Count | Should -Be 0
+        Write-Roadmap @([pscustomobject]@{ id = 'E1'; titre = 't'; but = 'b'; documents = @('docs/absent.md'); passe = 'complète'; etat = 'fait' })
+        @(Check-Consistency | Where-Object { $_.type -eq 'ref-morte' }).Count | Should -Be 1
     }
 }
 

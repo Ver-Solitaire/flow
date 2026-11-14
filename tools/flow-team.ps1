@@ -1217,6 +1217,21 @@ function Set-PaneState([string]$tag, [string]$pstate, [string]$label) {
     & psmux -L $Sock set -p -t $tgt '@flow_state' $pstate *> $null
 }
 
+function Accept-TrustPrompt($t) {
+    # Claude Code demande « Do you trust this folder ? » dans chaque NOUVEAU dossier : sans réponse, l'ouvrier attend indéfiniment
+    # (vu en vrai : 35 minutes d'attente sur un projet neuf). Ce dossier est une copie de travail que FLOW vient de créer pour
+    # cette équipe : FLOW répond « Yes, I trust this folder » — seulement si l'écran nomme bien cette copie.
+    if (-not $Psmux -or -not $t.worktree) { return $false }
+    $tgt = Find-Pane $t.id; if (-not $tgt) { return $false }
+    $txt = (@(& psmux -L $Sock capture-pane -p -t $tgt 2>$null) -join "`n")
+    if ($txt -notmatch 'trust this folder' -or $txt -notmatch 'Accessing workspace') { return $false }
+    if ($txt -notmatch [regex]::Escape("$($State.id)") -or $txt -notmatch [regex]::Escape((Split-Path "$($t.worktree)" -Leaf))) { return $false }
+    & psmux -L $Sock send-keys -t $tgt Down *> $null; Start-Sleep -Milliseconds 300
+    & psmux -L $Sock send-keys -t $tgt Enter *> $null
+    Write-FlowLog "tâche $($t.id) : dossier de travail approuvé pour Claude Code ($($t.worktree))"
+    $true
+}
+
 function Focus-Pane([string]$tag) {
     $tgt = Find-Pane $tag
     if (-not $tgt) { return $false }
@@ -1434,14 +1449,14 @@ function Mode-Setup {
             $script:RepoRoot = [IO.Path]::GetFullPath($target)
             Exclude-Flow
             [void](Git-In $RepoRoot @('add', '-A'))
-            [void](Git-In $RepoRoot @('commit', '-q', '-m', 'flow: commit initial'))
+            [void](Git-In $RepoRoot @('commit', '-q', '--allow-empty', '-m', 'flow: commit initial'))
             continue
         }
         Exclude-Flow
         if (-not (Has-Commit)) {
             $k = Message-Screen '⚑ ÉQUIPE — le dépôt n''a encore aucun commit' @('Les ouvriers partent du dernier commit : il en faut au moins un.', 'C = créer un premier commit avec le contenu actuel.') @('C', 'commit', 'Échap', 'retour')
             if ($k.Key -eq 'Escape') { return 'quit' }
-            if ("$($k.KeyChar)".ToLower() -eq 'c') { [void](Git-In $RepoRoot @('add', '-A')); [void](Git-In $RepoRoot @('commit', '-q', '-m', 'flow: commit initial')) }
+            if ("$($k.KeyChar)".ToLower() -eq 'c') { [void](Git-In $RepoRoot @('add', '-A')); [void](Git-In $RepoRoot @('commit', '-q', '--allow-empty', '-m', 'flow: commit initial')) }
             continue
         }
         Remember-Project $RepoRoot
@@ -2335,6 +2350,7 @@ function Mode-Run {
                     } elseif ($Psmux -and -not (Find-Pane $t.id)) {
                         $t.live = 'closed'
                     } else {
+                        [void](Accept-TrustPrompt $t)
                         $t.live = Claude-State (Acct-ById $t.account) $t.worktree
                         if ($t.live -ne $prevLive[$t.id] -and $Psmux) {
                             switch ($t.live) {

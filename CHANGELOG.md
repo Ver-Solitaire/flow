@@ -4,6 +4,11 @@
 
 **Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1.
 
+### Audit d'un projet neuf (budget-cli)
+- **Ouvriers bloqués sur « Do you trust this folder ? »** : sur un projet neuf, Claude Code pose cette question dans chaque nouvelle copie de travail et les ouvriers attendaient indéfiniment (35 minutes constatées). FLOW répond maintenant lui-même « Yes, I trust this folder », uniquement pour la copie qu'il vient de créer pour l'équipe (le texte de l'écran doit nommer cette copie).
+- **Dossier vide** : « C commit » ne faisait rien (Git refuse un commit vide) ; il crée maintenant un premier commit vide.
+- **Tri sur un projet neuf** : plus de 17 « références mortes » pour des étapes pas encore faites (elles citent des documents qu'elles créeront).
+
 ### Valider simplement
 - **Entrée = valider** sur l'écran de validation du travail de l'équipe (comme pour le plan et la spécification) : un seul geste, la touche F reste possible. La bannière et l'aide du bas le disent (« Entrée = VALIDER et mettre dans ton projet · V = lire d'abord »).
 - Une livraison qui ne change rien (ton projet contient déjà ce résultat) n'échoue plus avec « le commit final a échoué » : elle se termine proprement.
