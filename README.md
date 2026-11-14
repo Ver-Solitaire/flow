@@ -375,6 +375,20 @@ Pour un gros projet, FLOW crée avec toi une **méthode de travail écrite**, da
 
 Une fois validé, le cahier et l'étape en cours sont ajoutés aux consignes du planificateur, du guide, des ouvriers et des relecteurs. Les données à protéger et les interdits sont aussi inscrits dans `.flow\config.json` (`protectedPaths`, `guardrails`) : c'est là qu'ils sont lus. **Feuille de route vivante** (**F9** depuis l'écran de demande) : avancement des étapes, équipes en cours, journal. Chaque équipe est **rattachée à une étape** (proposée par le planificateur, **T** pour la changer dans le plan) : au lancement l'étape passe « en cours », une équipe jetée ou abandonnée la remet dans son état d'avant, et après une livraison FLOW demande si l'étape est terminée. Le journal (`.flow\workflow\journal.md`) garde une ligne datée par événement. Si `ROADMAP.md` contient une ligne illisible, FLOW ne réécrit rien tant que tu ne l'as pas corrigée (`ROADMAP.md.bak` garde la version précédente). La suite (passe de conception puis de construction par étape, enchaînement, hooks, tri des contradictions) est prévue par livraisons.
 
+### Hooks : le projet s'enrichit en travaillant (H dans le profil)
+
+FLOW branche des **hooks de Claude Code** dans le projet (`.claude\settings.local.json`, non commité) et dans la copie de travail de chaque ouvrier. Ils agissent dans **toutes** les sessions Claude de ce dossier, pas seulement dans FLOW. Proposés à la validation du workflow ; **H** dans le profil pour les voir, les activer ou les désactiver. Ils **fusionnent** avec tes réglages existants (tes autres hooks ne sont jamais touchés) et ne font jamais appel à Claude.
+
+| Événement | Ce que fait le hook |
+|---|---|
+| Début de session | injecte la feuille de route, l'étape à poursuivre, les règles décidées, les interdits et les pièges déjà rencontrés |
+| Tes messages | repère décisions, interdictions et préférences → **candidats** pour la mémoire |
+| Avant une écriture | **refuse** de modifier un chemin protégé (réglage `protectedPaths`), y compris par une commande shell, même en mode `bypassPermissions` ; seulement s'il y a des chemins protégés |
+| Fin de tour | signale des fichiers modifiés sans mise à jour de `memoire\` |
+| Avant compaction | note l'étape et les fichiers en cours |
+
+Les **candidats** (`.flow\candidats\candidats.jsonl`, exclu de Git, secrets masqués) ne sont jamais écrits dans la mémoire tels quels : le scribe les reçoit à la fin de chaque équipe et n'en retient que ce qui est clairement une décision ou un piège ; ils sont ensuite archivés dans `.flow\candidats\archives\`. Limites : le refus d'une commande shell est une heuristique (verbes de modification + chemin cité) qui ne peut pas tout voir, par exemple un script qui modifie le chemin sans le nommer.
+
 ### Mémoire de ta façon de travailler (F8)
 
 FLOW apprend **comment tu travailles** et en garde une mémoire **locale**, pour que les prochains Claude t'aident mieux sans te redemander ce que tu as déjà montré. Rien n'est envoyé ailleurs : tout est dans `%LOCALAPPDATA%\FLOW\profil\`, hors de tes projets et de Git.

@@ -31,7 +31,7 @@ BeforeAll {
 
 Describe 'Pièges PowerShell' {
     It 'aucune fonction de FLOW.ps1, de flow-team.ps1 ni des modules qu''il charge ne masque une couleur d''affichage' {
-        $found = foreach ($f in 'FLOW.ps1', 'tools\flow-team.ps1', 'tools\flow-workflow.ps1', 'tools\flow-profile.ps1', 'tools\flow-deps.ps1') { Find-ShadowedColors (Join-Path $script:Root $f) }
+        $found = foreach ($f in 'FLOW.ps1', 'tools\flow-team.ps1', 'tools\flow-workflow.ps1', 'tools\flow-hooks.ps1', 'tools\flow-profile.ps1', 'tools\flow-deps.ps1') { Find-ShadowedColors (Join-Path $script:Root $f) }
         @($found) | Should -BeNullOrEmpty
     }
 

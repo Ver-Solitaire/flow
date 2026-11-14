@@ -332,7 +332,13 @@ function Invoke-WorkflowCreation {
             if ($k.Key -eq 'Enter') {
                 Save-WfMeta $true
                 Write-Event 'workflow_cree' @{ etapes = @($draft.Steps).Count; protege = @($draft.Protected).Count; refait = [bool]$Redo }
-                return "$Ok✓ workflow validé : $(Wf-Dir) — à commiter pour le partager avec le projet$R"
+                $hk = ''
+                if ($Cfg -and $Cfg.hooks -ne $true) {
+                    Cls
+                    $kh = Message-Screen '⚑ HOOKS — faire vivre le workflow' (@("Les hooks de Claude Code peuvent enrichir ce projet pendant que tu travailles :", '') + @(Hooks-Summary-Lines) + @('', "$Dm Ils agissent dans toutes les sessions Claude de ce dossier. Rien n'est écrit dans la mémoire sans examen ; tes autres réglages ne sont jamais touchés.$R")) @('Entrée', 'activer', 'Échap', 'plus tard (H dans le profil)')
+                    if ($kh.Key -eq 'Enter') { $he = @(Set-ProjectHooks $true); $hk = if ($he.Count) { " $Err✗ hooks : $($he[0])$R" } else { " $Ok✓ hooks activés$R" } }
+                } elseif ($Cfg -and $Cfg.hooks -eq $true) { [void](Sync-Hooks) }
+                return "$Ok✓ workflow validé : $(Wf-Dir) — à commiter pour le partager avec le projet$R$hk"
             }
             elseif ($k.Key -eq 'Escape') { return "$Warn workflow gardé en brouillon (non validé, donc pas encore transmis aux Claude) : W pour le reprendre$R" }
             elseif ($ch -eq 'e') {

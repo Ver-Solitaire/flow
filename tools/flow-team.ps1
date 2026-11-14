@@ -139,6 +139,7 @@ $GitExe = Find-Git
 . (Join-Path $PSScriptRoot 'flow-profile.ps1')  # mémoire locale de la façon de travailler de l'utilisateur
 . (Join-Path $PSScriptRoot 'flow-deps.ps1')     # dépendances : une seule liste (dependances.json)
 . (Join-Path $PSScriptRoot 'flow-workflow.ps1') # workflow du projet : cahier, feuille de route (.flow\workflow\)
+. (Join-Path $PSScriptRoot 'flow-hooks.ps1')    # hooks de Claude Code dans le projet : installation, candidats
 $global:FlowLogFile = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\config\flow.log'))
 $GitId = @()
 $GitCode = 0
@@ -449,6 +450,7 @@ function Mode-Profile {
         else { $L.Add("     $Dm(aucune détectée — A pour demander à Claude, E pour les écrire)$R") }
         $wfState = if (Wf-Validated) { "$Ok✓ validé$R $Dm(.flow\workflow\ : cahier et feuille de route)$R" } elseif (Wf-Exists) { "$Warn brouillon non validé$R $Dm(W pour le reprendre)$R" } else { "$Dm aucun — W pour le créer avec Claude (conseillé pour un gros projet)$R" }
         $L.Add("  $B Workflow$R               $wfState")
+        $L.Add("  $B Hooks$R                  $(if ($Cfg.hooks -eq $true) { "$Ok✓ actifs$R $Dm(H pour voir ou désactiver)$R" } else { "$Dm désactivés — H pour les activer (le projet s'enrichit en travaillant)$R" })")
         $L.Add("  $B Branches$R               $($Cfg.branchPrefix)<équipe>-<tâche>")
         $L.Add("  $B Commits$R                $(if ($Cfg.commitStyle -eq 'conventional') { 'Conventional Commits (feat:, fix:…)' } else { 'style libre, comme l''historique' })")
         $L.Add("  $B Livraison$R              $(Deliver-Label $Cfg.deliver)$(if ($Cfg.targetBranch) { " $Dm→ $($Cfg.targetBranch)$R" } else { " $Dm→ branche actuelle$R" })")
@@ -463,7 +465,7 @@ function Mode-Profile {
             $L.Add(''); $L.Add("  $Dm ℹ pas de mémoire du projet (dossier memoire\) : G pour la créer ; après chaque travail, un « scribe » la met à jour.$R")
         }
         $L.Add('')
-        $L.Add((Keys @('Entrée', 'valider', 'A', 'affiner avec Claude', 'L', 'mode de livraison', 'E', 'modifier (JSON)', 'D', 'redétecter', 'G', 'créer CLAUDE.md + mémoire', 'W', 'workflow du projet', 'Échap', 'retour')))
+        $L.Add((Keys @('Entrée', 'valider', 'A', 'affiner avec Claude', 'L', 'mode de livraison', 'E', 'modifier (JSON)', 'D', 'redétecter', 'G', 'créer CLAUDE.md + mémoire', 'W', 'workflow du projet', 'H', 'hooks', 'Échap', 'retour')))
         $L.Add("  $Dm Enregistré dans .flow\config.json : tu peux le commiter pour le partager avec le projet.$R")
         if ($msg) { $L.Add("  $msg") }
         Show-Frame $L
@@ -486,6 +488,7 @@ function Mode-Profile {
             $msg = Invoke-WorkflowCreation -Redo:$redo
             Cls
         }
+        elseif ($ch -eq 'h') { Save-ProjectConfig; $msg = Mode-Hooks; Cls }
         elseif ($ch -eq 'a') { $msg = Refine-WithClaude; Cls }
         elseif ($ch -eq 'd') { $keep = $Cfg.instructions; $script:Cfg = Detect-Project; $Cfg.instructions = $keep; $msg = "$Info↻ profil redétecté$R" }
         elseif ($ch -eq 'l') {
@@ -1450,6 +1453,7 @@ function Mode-Home {
         elseif ($c0 -eq 'n' -and $Cfg) { $Cfg | Add-Member -NotePropertyName workflowDeclined -NotePropertyValue $true -Force; Save-ProjectConfig }
         Cls
     }
+    if (-not $global:FlowHooksSynced) { $global:FlowHooksSynced = $true; [void](Sync-Hooks) }
     $runs = Open-Runs
     if ($runs.Count -and -not $global:FlowPrefill) {
         $i = 0
@@ -1860,6 +1864,7 @@ function Start-Task($t) {
         if ($GitCode -ne 0) { [void](Git-In $wt @('merge', '--abort')); $t.status = 'failed'; $t.error = "conflit entre les dépendances $($deps -join ' et ')"; return }
     }
     $t.worktree = $wt
+    if ($Cfg.hooks -eq $true) { try { [void](Install-FlowHooks -Root $wt -Project $RepoRoot -Protected @($Cfg.protectedPaths)) } catch { Write-FlowLog "hooks : copie de $($t.id) : $($_.Exception.Message)" 'ERREUR' } }
     Prepare-Copy $wt
     $pf = Join-Path $RunDir "taches\$($t.id).prompt.md"
     Set-Content -LiteralPath $pf (Worker-Prompt $t) -Encoding utf8
@@ -2476,7 +2481,7 @@ s'il existe, $(Join-Path $RunDir 'verifications.txt'). Demande de l'utilisateur 
 4. historique.md : ajoute UNE ligne datée en haut : « $(Get-Date -Format 'dd/MM/yyyy') — <titre du travail> (équipe $($State.id)) : <résumé en une phrase> ».
 5. Si une fiche thématique existe pour le sujet touché, mets-la à jour de la même façon (REMPLACER, pas ajouter en bas). Ne crée une nouvelle fiche (et sa ligne dans INDEX.md) que si un nouveau sujet le mérite.
 Règles : factuel, court, en français ; cite le fichier source entre parenthèses ; si tu n'es pas sûr d'un fait, ne l'écris pas ; ne recopie aucun secret.
-$(Guardrails-Text)
+$(Candidates-Block)$(Guardrails-Text)
 Réponds UNIQUEMENT avec un objet JSON : { "fiches": ["fichiers modifiés"], "resume": "une phrase" }
 "@
 }
@@ -2485,12 +2490,14 @@ function Invoke-Scribe([string]$iw) {
     # une seule fois par équipe (marqueur dans l'état) ; ne garde que ce qui est dans memoire\ et le commite sur la branche d'intégration
     if (-not (Scribe-On $iw)) { Set-IntProp 'scribe' 'non'; Save-State; return }
     $acct = Least-Loaded
+    $candN = [Math]::Min(30, @(Read-Candidates).Count)
     $pf = Join-Path $RunDir 'scribe.prompt.md'
     Set-Content -LiteralPath $pf (Scribe-Prompt $iw) -Encoding utf8
     $job = Start-ClaudeJob $iw $acct $pf 'sonnet' 'Read,Grep,Glob,Edit,Write'
     $res = Wait-Job-Spinner $job "le scribe (sonnet, $($acct.Label)) met à jour la mémoire du projet (memoire\)…"
     if ($null -eq $res) { Set-IntProp 'scribe' 'annulé'; Save-State; return }
     Log-Call 'scribe' $acct 'sonnet' $res
+    Consume-Candidates $candN
     Set-Content -LiteralPath (Join-Path $RunDir 'scribe-sortie.txt') "$($res.Out)" -Encoding utf8
     $st = @(Git-In $iw @('-c', 'core.quotepath=false', 'status', '--porcelain', '-uall') | Where-Object { "$_".Trim() })
     $inMem = @(); $outside = @()

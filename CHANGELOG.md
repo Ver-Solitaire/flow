@@ -4,6 +4,13 @@
 
 **Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1.
 
+### Hooks de Claude Code (livraison 3)
+- **Hooks installés par FLOW** dans `.claude\settings.local.json` du projet et de chaque copie de travail des ouvriers (proposés à la validation du workflow, **H** dans le profil). L'installation **fusionne** : tes autres réglages et hooks ne sont jamais touchés, seules les entrées de FLOW sont ajoutées ou retirées.
+- **Protection réelle des chemins protégés** (`PreToolUse`) : l'écriture dans un chemin protégé du projet, ou une commande shell qui le modifie, est refusée **même en mode `bypassPermissions`** (vérifié avec un vrai Claude). Avant, ce n'était qu'une consigne.
+- **Début de session** : la feuille de route, les règles décidées, les interdits et les pièges déjà rencontrés sont injectés dans le contexte de chaque Claude du projet.
+- **Candidats** (`.flow\candidats\`) : les hooks repèrent décisions, interdictions et préférences dans tes messages, les fichiers modifiés sans mise à jour de `memoire\`, les refus et l'état avant compaction. Ils **ne modifient jamais** la mémoire : le scribe les reçoit dans sa consigne, puis ils sont archivés (rien n'est supprimé). Secrets masqués.
+- Les hooks ne font jamais appel à Claude, ne bloquent jamais une session par erreur (toute erreur = on laisse faire) et coûtent environ 0,3 s par événement.
+
 ### Feuille de route vivante (livraison 2)
 - **Écran « Feuille de route »** (**F9** depuis l'écran de demande) : barre d'avancement, étapes avec leur état, passe et équipes en cours, journal du projet. **S** change l'état de l'étape choisie, **P** sa passe, **E** ouvre le tableau, **J** lit le journal.
 - **Une équipe est rattachée à une étape** : le planificateur voit la feuille de route et propose l'étape concernée ; **T** dans l'écran du plan la change. Au lancement du plan, l'étape passe « en cours » ; équipe abandonnée ou jetée, elle retrouve son état d'avant ; après une livraison, FLOW demande si l'étape est terminée (sans réponse explicite, elle reste en cours).
