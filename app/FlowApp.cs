@@ -1,4 +1,4 @@
-// FLOW — application de lancement : choisir un projet, puis ouvrir FLOW (Claude × psmux) dedans.
+﻿// FLOW — application de lancement : choisir un projet, puis ouvrir FLOW (Claude × psmux) dedans.
 // Compilé par FLOW.ps1 -InstallShortcut (csc du .NET Framework, C# 5) → FLOW.exe à la racine du dossier FLOW.
 //   FLOW.exe                    fenêtre de choix du projet
 //   FLOW.exe C:\chemin\projet   ouvre directement FLOW sur ce projet
@@ -99,19 +99,47 @@ namespace Flow
             catch { return false; }
         }
 
+        // pwsh.exe : dans le PATH, sinon à son emplacement habituel (le PATH d'une fenêtre ouverte avant l'installation ne le contient pas encore) ; null s'il n'existe pas
+        public static string FindPwsh()
+        {
+            foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';'))
+            {
+                try
+                {
+                    var d = dir.Trim().Trim('"');
+                    if (d.Length == 0) continue;
+                    var p = Path.Combine(d, "pwsh.exe");
+                    if (File.Exists(p)) return p;
+                }
+                catch { }
+            }
+            var pf = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"PowerShell\7\pwsh.exe");
+            if (File.Exists(pf)) return pf;
+            var store = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Microsoft\WindowsApps\pwsh.exe");   // installation du Store
+            return File.Exists(store) ? store : null;
+        }
+
         // ouvre FLOW dans une nouvelle fenêtre de terminal ; dir = null : sans projet
         public static bool Run(string root, string dir)
         {
+            // PowerShell 7 d'abord : sans lui, Windows Terminal s'ouvrirait sur une erreur obscure au lieu d'un message clair
+            var pwsh = FindPwsh();
+            if (pwsh == null)
+            {
+                MessageBox.Show("PowerShell 7 est introuvable : FLOW ne peut pas démarrer.\n\nDouble-clique sur install.cmd (dans le dossier FLOW) : il l'installe, avec le reste.",
+                    "FLOW", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
             var script = Path.Combine(root, "FLOW.ps1");
             var title = dir == null ? "FLOW" : "FLOW · " + Path.GetFileName(dir.TrimEnd('\\'));
             var ps = "-NoProfile -ExecutionPolicy Bypass -File " + Q(script) + (dir == null ? "" : " -Project " + Q(dir));
             // wt.exe est résolu au lancement (alias d'application) : survit aux mises à jour de Windows Terminal
             var wtAlias = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Microsoft\WindowsApps\wt.exe");
-            var wtArgs = "-w new --title " + Q(title) + " pwsh " + ps;
+            var wtArgs = "-w new --title " + Q(title) + " " + Q(pwsh) + " " + ps;
             if (TryStart("wt.exe", wtArgs)) return true;
             if (File.Exists(wtAlias) && TryStart(wtAlias, wtArgs)) return true;
-            if (TryStart("pwsh.exe", ps)) return true;
-            MessageBox.Show("PowerShell 7 (pwsh) est introuvable.\n\nInstalle-le avec :  winget install Microsoft.PowerShell\nou lance install.cmd dans le dossier FLOW.",
+            if (TryStart(pwsh, ps)) return true;
+            MessageBox.Show("FLOW n'a pas pu ouvrir PowerShell 7.\n\nDouble-clique sur install.cmd (dans le dossier FLOW) pour vérifier l'installation.",
                 "FLOW", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return false;
         }

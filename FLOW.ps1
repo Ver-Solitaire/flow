@@ -1,4 +1,4 @@
-<#
+﻿<#
   FLOW — lanceur Claude × psmux avec sélecteur de profils (version portable).
 
     FLOW.ps1                    ouvre le sélecteur animé
@@ -29,6 +29,15 @@ param(
     [switch]$TeamDemo,          # FLOW.ps1 -TeamDemo : simulation de la fenêtre Équipe (prompt → plan → ouvriers → fusion)
     [switch]$ShareDemo          # FLOW.ps1 -ShareDemo : démonstration des bibliothèques de profils partagés
 )
+# Windows PowerShell 5.1 (clic droit « Exécuter avec PowerShell ») : une phrase claire plutôt que des erreurs de syntaxe.
+# Ce fichier DOIT rester en UTF-8 avec BOM : sans lui, 5.1 le lit en ANSI et la garde n'a même pas le temps de s'afficher.
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Host ''
+    Write-Host "  PowerShell 7 est introuvable : FLOW ne peut pas démarrer (ici : Windows PowerShell $($PSVersionTable.PSVersion))." -ForegroundColor Red
+    Write-Host '  Double-clique sur install.cmd (dans le dossier FLOW) : il l''installe, avec le reste. Ensuite, lance FLOW avec son raccourci ou FLOW.cmd.'
+    if (-not $env:FLOW_NOPAUSE) { Read-Host '  Entrée pour fermer' | Out-Null }
+    exit 1
+}
 if ($ShareDemo) { & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'tools\flow-share-demo.ps1'); return }
 if ($Demo) { & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'tools\flow-demo.ps1'); return }
 if ($TeamDemo) { & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'tools\flow-team-demo.ps1'); return }
@@ -49,6 +58,7 @@ $ProjectsRoot = Split-Path $Root -Parent                  # les projets proposé
 $ProjectDir = $null                                       # projet courant (-Project, touche J) ; $null = dossiers des profils
 $ProjSlug  = ''
 $Sources   = @()
+. (Join-Path $Root 'tools\flow-deps.ps1')            # dependances : lues dans dependances.json (une seule liste)
 
 # Environnement propre : pas de NO_COLOR hérité, rendu ANSI forcé
 foreach ($v in 'NO_COLOR', 'GIT_TERMINAL_PROMPT') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
@@ -1245,7 +1255,7 @@ function Git-Exe {
 
 function Git-Do([string]$dir, [string[]]$gargs) {
     $g = Git-Exe
-    if (-not $g) { throw 'Git est introuvable (winget install --id Git.Git -e)' }
+    if (-not $g) { throw (Get-DepMissingText 'git') }
     $id = @()
     if (-not "$(& $g -C $dir config user.email 2>$null)".Trim()) { $id = @('-c', 'user.name=FLOW', '-c', 'user.email=flow@localhost') }
     $out = & $g -C $dir @id @gargs 2>&1
@@ -1683,18 +1693,30 @@ function Invoke-Doctor {
     Write-Host ''
     Write-Host "  $(Grad "◆ FLOW — diagnostic$(if ($FlowVersion) { " (v$FlowVersion)" })" 0.1 0.03)"
     Write-Host "  $Dm$Root$R"; Write-Host ''
-    Write-Host "  $B Outils$R"
-    Line ($PSVersionTable.PSVersion.Major -ge 7) "PowerShell $($PSVersionTable.PSVersion)" 'winget install --id Microsoft.PowerShell'
+    Write-Host "  $B Outils$R $Dm(liste, versions minimales et commandes : dependances.json ; install.cmd -Check refait ce contrôle sans PowerShell 7)$R"
     $mux = Get-Command psmux -ErrorAction SilentlyContinue
-    Line ([bool]$mux) $(if ($mux) { "psmux : $((& psmux -V 2>$null | Select-Object -Last 1))" } else { 'psmux' }) 'winget install psmux'
-    $cl = Get-Command claude -ErrorAction SilentlyContinue
-    Line ([bool]$cl) $(if ($cl) { "Claude Code $((& claude --version 2>$null | Select-Object -First 1))" } else { 'Claude Code' }) 'winget install --id Anthropic.ClaudeCode'
     $gt = Get-Command git -ErrorAction SilentlyContinue
-    Line ([bool]$gt) $(if ($gt) { "Git $((& git --version 2>$null) -replace 'git version ', '')" } else { 'Git' }) 'winget install --id Git.Git'
+    foreach ($d in @(Get-FlowDeps | Where-Object { $_.quand -ne 'développement' -and $_.id -ne 'winget' })) {
+        $st = Get-DepState $d
+        $range = ''; if ($d.min) { $range = " $Dm(attendu : $($d.min) ou plus)$R" }
+        if ($st.Statut -eq 'ok') { Line $true "$(Get-DepMessage $st $d)$range" }
+        elseif ($st.Statut -eq 'inconnue') { Write-Host "  $Warn!$R $(Get-DepMessage $st $d)" }
+        elseif ($d.obligatoire -or $st.Statut -ne 'absent') { Line $false (Get-DepMessage $st $d) }
+        else { Write-Host "  $Dm– $($d.nom) : absent ($($d.quand)) — $(Get-DepInstallCommand $d)$R" }
+    }
     if ($gt) { $who = "$(& git config user.email 2>$null)".Trim(); Line ([bool]$who) $(if ($who) { "identité Git : $who" } else { 'identité Git non configurée' }) 'git config --global user.name "…" ; git config --global user.email "…" (sinon les commits de l''équipe sont signés « FLOW »)' }
-    Line ([bool](Get-Command wt.exe -ErrorAction SilentlyContinue)) 'Windows Terminal' 'winget install --id Microsoft.WindowsTerminal'
-    Line (Test-Path -LiteralPath (Join-Path $Root 'FLOW.exe')) 'application FLOW.exe' 'pwsh -File FLOW.ps1 -InstallShortcut'
-    Write-Host ''; Write-Host "  $B Comptes Claude$R"
+    $csc = Get-FlowDep -Id 'csc'
+    $cscOk = $csc -and (Get-DepState $csc).Present
+    if (Test-Path -LiteralPath (Join-Path $Root 'FLOW.exe')) { Line $true 'application FLOW.exe' }
+    elseif (-not $cscOk) { Write-Host "  $Dm– FLOW.exe : pas compilé (compilateur .NET Framework introuvable) : FLOW reste utilisable avec FLOW.cmd$R" }
+    else { Line $false 'application FLOW.exe' 'pwsh -File FLOW.ps1 -InstallShortcut (en attendant, FLOW.cmd fonctionne)' }
+    if (Test-Path -LiteralPath (Join-Path $Root 'tests')) {
+        Write-Host ''; Write-Host "  $B Pour le développement$R"
+        foreach ($d in @(Get-FlowDeps | Where-Object { $_.quand -eq 'développement' })) {
+            $st = Get-DepState $d
+            if ($st.Statut -eq 'ok') { Write-Host "  $Ok✓$R $(Get-DepMessage $st $d)" } else { Write-Host "  $Dm– $(Get-DepMessage $st $d)$R" }
+        }
+    }    Write-Host ''; Write-Host "  $B Comptes Claude$R"
     foreach ($a in $Accounts) {
         $m = Acct-Mail $a
         Line $a.Logged "$($a.Label) [$($a.Id)] : $(if ($a.Logged) { "connecté$(if ($m) { " ($m)" })" } else { 'pas connecté' })" "pwsh -File FLOW.ps1 -Login $($a.Id)  (ou touche C dans le sélecteur)"
@@ -1726,17 +1748,18 @@ function Invoke-Doctor {
 
 # ───────────────────────── raccourci bureau ─────────────────────────
 function Build-App {
-    # compile app\FlowApp.cs → FLOW.exe (csc du .NET Framework, présent sur tout Windows 10/11)
+    # compile app\FlowApp.cs → FLOW.exe (csc du .NET Framework : composant Windows, voir dependances.json) ; sans lui, FLOW.cmd suffit
     $src = Join-Path $Root 'app\FlowApp.cs'
     $exe = Join-Path $Root 'FLOW.exe'
     $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
     if (-not (Test-Path -LiteralPath $csc)) { $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe' }
-    if (-not (Test-Path -LiteralPath $src) -or -not (Test-Path -LiteralPath $csc)) { return $null }
+    if (-not (Test-Path -LiteralPath $src)) { Write-Host "  FLOW.exe n'a pas pu être compilé : app\FlowApp.cs est introuvable. FLOW reste utilisable avec FLOW.cmd." -ForegroundColor Yellow; return $null }
+    if (-not (Test-Path -LiteralPath $csc)) { Write-Host "  FLOW.exe n'a pas pu être compilé : le compilateur .NET Framework (csc.exe) est introuvable. Ce n'est pas bloquant : FLOW reste utilisable avec FLOW.cmd, et les raccourcis le lancent." -ForegroundColor Yellow; return $null }
     $ico = Join-Path $Root 'assets\flow.ico'
     $cargs = @('/nologo', '/target:winexe', '/optimize+', "/out:$exe", '/r:System.Web.Extensions.dll', '/r:System.Windows.Forms.dll', '/r:System.Drawing.dll')
     if (Test-Path -LiteralPath $ico) { $cargs += "/win32icon:$ico" }
     $out = & $csc @cargs $src 2>&1
-    if ($LASTEXITCODE -ne 0) { Write-Host "compilation de FLOW.exe impossible :`n$($out -join "`n")" -ForegroundColor Yellow; return $null }
+    if ($LASTEXITCODE -ne 0) { Write-Host "  FLOW.exe n'a pas pu être compilé :`n$($out -join "`n")`n  Ce n'est pas bloquant : FLOW reste utilisable avec FLOW.cmd, et les raccourcis le lancent." -ForegroundColor Yellow; return $null }
     $exe
 }
 
@@ -1764,7 +1787,9 @@ function Install-Shortcut {
         $lnk.Description = 'FLOW — choisir un projet, puis Claude × psmux'
         $lnk.Save()
     }
-    $paths -join ' · '
+    $res = $paths -join ' · '
+    if (-not $exe) { $res += ' (lancent FLOW.cmd : FLOW.exe n''a pas été compilé)' }
+    $res
 }
 
 # ───────────────────────── sélecteur ─────────────────────────
@@ -2006,7 +2031,7 @@ function Show-Selector([string]$msg, [string]$selectId) {
         param($p)
         if (-not $p) { return $null }
         if (((Uses-Role $p 'claude') -or (Uses-Role $p 'team')) -and -not $deps.claude) {
-            $U.Msg = "$Err✗ Claude Code est introuvable (commande « claude ») : installe-le avant de lancer ce profil$R"
+            $U.Msg = "$Err✗ $(Get-DepMissingText 'claude') Installe-le avant de lancer ce profil.$R"
             return $null
         }
         # la fenêtre Équipe travaille sur UN projet : sans projet choisi, elle s'ouvrirait sur le dossier qui les contient tous
@@ -2232,7 +2257,7 @@ if ($Login) {
 }
 
 if (-not (Get-Command psmux -ErrorAction SilentlyContinue)) {
-    Write-Host "psmux est introuvable. Installe-le avec :  winget install marlocarlo.psmux" -ForegroundColor Red
+    Write-Host (Get-DepMissingText 'psmux') -ForegroundColor Red
     Read-Host 'Entrée pour quitter' | Out-Null
     return
 }
