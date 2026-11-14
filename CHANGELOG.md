@@ -1,6 +1,6 @@
 # Journal des changements
 
-## Non publié
+## 1.3.0 — 14 novembre 2026
 
 ### Ajouté
 - **Mode guidé** (F7 sur l'écran de demande) : FLOW pose des questions avant le plan (guide), pour les décisions du plan (plan refait si tu t'écartes de la recommandation), via chaque ouvrier pendant le travail, et à la validation (« c'est bien ce que tu voulais ? » : livrer, ajuster ou refaire avec ton retour).
