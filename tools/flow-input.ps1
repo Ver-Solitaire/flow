@@ -175,7 +175,10 @@ function Read-Action([switch]$Wait, [int]$TimeoutMs = 0, [switch]$Wheel) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     while ($true) {
         $left = if ($TimeoutMs -gt 0) { [Math]::Max(1, $TimeoutMs - [int]$sw.ElapsedMilliseconds) } else { 0 }
-        $ev = Read-Event -Wait:$Wait -TimeoutMs $left
+        # un écran qui attend l'utilisateur (bannière « À toi ») : on attend par petits pas pour la faire pulser
+        $anim = (($Wait -or $TimeoutMs -gt 0) -and $script:AttnRow -ge 0 -and (Get-Command Pulse-Attention -ErrorAction SilentlyContinue))
+        $ev = if ($anim) { Read-Event -Wait -TimeoutMs $(if ($TimeoutMs -gt 0) { [Math]::Max(1, [Math]::Min(330, $left)) } else { 330 }) } else { Read-Event -Wait:$Wait -TimeoutMs $left }
+        if (-not $ev -and $anim) { if ($TimeoutMs -gt 0 -and $sw.ElapsedMilliseconds -ge $TimeoutMs) { return $null }; Pulse-Attention; continue }
         if (-not $ev) { return $null }
         if ($ev.Kind -eq 'key') { return @{ K = $ev.K } }
         if ($ev.Kind -eq 'wheel' -and $Wheel) { return @{ Wheel = $true; Up = [bool]$ev.Up } }

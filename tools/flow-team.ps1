@@ -94,6 +94,8 @@ function Show-Frame($lines) {
     # fenêtre redimensionnée : tout effacer, sinon des morceaux de l'ancienne image restent à l'écran
     $sz = "$(ConW)x$(ConH)"
     if ($sz -ne $script:LastFrameSize) { [Console]::Write("$e[2J"); $script:LastFrameSize = $sz }
+    $script:AttnRow = -1
+    for ($ai = 0; $ai -lt $lines.Count; $ai++) { if ("$($lines[$ai])" -like "*$script:AttnMark*") { $script:AttnRow = $ai; break } }
     $sb = [Text.StringBuilder]::new(); [void]$sb.Append("$e[H")
     for ($i = 0; $i -lt $H - 1; $i++) {
         $line = if ($i -lt $lines.Count) { $lines[$i] } else { '' }
@@ -112,13 +114,55 @@ $Spin = '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'
 $Tick = 0
 
 
-function Notify([string]$title, [string]$text) {
+# ───────────────────────── « À toi » : bannière animée, son, notification, rappel ─────────────────────────
+# Un écran qui attend une décision de l'utilisateur (plan à valider, résultat à valider, spec, conflit…) affiche une bannière
+# qui pulse (Attn), prévient une fois par une notification Windows avec un son et le clignotement de la fenêtre, puis rappelle
+# toutes les 3 minutes tant que rien n'est fait. La bannière se redessine pendant l'attente (Read-Action appelle Pulse-Attention).
+$script:AttnMark = '⚑ À TOI'
+$script:AttnRow = -1
+$script:AttnMsg = ''; $script:AttnTitle = ''; $script:AttnPhase = 0
+$script:AttnAlerts = @{}                   # clé → dernière alerte
+$script:AttnRemindSec = 180
+function Attn-Line([string]$msg, [int]$phase) {
+    $w = [Math]::Max(30, (ConW) - 1)
+    $k = [Math]::Sin($phase * 0.45) * 0.5 + 0.5                         # 0..1 : la couleur pulse
+    $cr = 255; $cg = [int](150 + 90 * $k); $cb = [int](20 + 90 * $k)
+    $chev = ('▶' * (1 + ($phase % 3))).PadRight(3)
+    $txt = " $chev $script:AttnMark  $msg"
+    if ($txt.Length -gt $w) { $txt = $txt.Substring(0, $w) }
+    "$([char]27)[1;38;2;25;20;10;48;2;$cr;$cg;$($cb)m$($txt.PadRight($w))$([char]27)[0m"
+}
+function Attn([string]$msg, [string]$title = '⚑ FLOW : à toi de jouer') {
+    # la ligne « À toi » d'un écran qui attend l'utilisateur ; prévient une fois (puis rappelle)
+    $script:AttnMsg = $msg; $script:AttnTitle = $title; $script:AttnPhase++
+    [void](Attention-Alert $title $msg)
+    Attn-Line $msg $script:AttnPhase
+}
+function Attention-Alert([string]$title, [string]$text) {
+    # une alerte par situation (clé = titre + texte) ; renvoie $true si elle a été émise. Jamais pendant les tests.
+    if ($global:FlowNoAi) { return $false }
+    $key = "$title|$text"; $now = Get-Date
+    if ($script:AttnAlerts.ContainsKey($key) -and ($now - $script:AttnAlerts[$key]).TotalSeconds -lt $script:AttnRemindSec) { return $false }
+    $script:AttnAlerts[$key] = $now
+    Notify $title $text -Attention
+    $true
+}
+function Pulse-Attention {
+    # appelé pendant l'attente d'une touche : redessine la bannière (animation) et rappelle de temps en temps
+    if ($script:AttnRow -lt 0 -or -not $script:AttnMsg) { return }
+    $script:AttnPhase++
+    [Console]::Write("$([char]27)[$($script:AttnRow + 1);1H$(Attn-Line $script:AttnMsg $script:AttnPhase)")
+    [void](Attention-Alert $script:AttnTitle $script:AttnMsg)
+}
+
+function Notify([string]$title, [string]$text, [switch]$Attention) {
     $ico = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\assets\flow.ico'))
     $cmd = "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; " +
         "`$n = [System.Windows.Forms.NotifyIcon]::new(); " +
         "`$n.Icon = if (Test-Path -LiteralPath $(Q $ico)) { [System.Drawing.Icon]::new($(Q $ico)) } else { [System.Drawing.SystemIcons]::Information }; " +
         "`$n.Text = 'FLOW'; `$n.Visible = `$true; " +
-        "`$n.ShowBalloonTip(6000, $(Q $title), $(Q $text), [System.Windows.Forms.ToolTipIcon]::Info); Start-Sleep -Seconds 8; `$n.Dispose()"
+        $(if ($Attention) { "& $(Q ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'flow-flash.ps1')))) -ProcId $PID; " }) +
+        "`$n.ShowBalloonTip(6000, $(Q $title), $(Q $text), [System.Windows.Forms.ToolTipIcon]::$(if ($Attention) { 'Warning' } else { 'Info' })); Start-Sleep -Seconds 8; `$n.Dispose()"
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
     try { Start-Process pwsh -WindowStyle Hidden -ArgumentList @('-NoProfile', '-EncodedCommand', $enc) } catch {}
 }
@@ -1765,7 +1809,7 @@ function Mode-Plan {
         $L = [Collections.Generic.List[string]]::new()
         $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — plan proposé' 0.1)   $Dm$($State.id)$R")
         $L.Add("  $B$($State.summary)$R"); $L.Add((Stepper 2))
-        $L.Add((Now 'vérifie le plan. Entrée = lancer l''équipe (tu peux changer compte, modèle ou tâches avant)'))
+        $L.Add((Attn 'vérifie le plan. Entrée = lancer l''équipe (tu peux changer compte, modèle ou tâches avant)' '⚑ FLOW : un plan attend ta validation'))
         $L.Add("  $(Accounts-Line)"); $L.Add('')
         $planZones = @()
         for ($i = 0; $i -lt $ts.Count; $i++) {
@@ -2978,7 +3022,7 @@ function Mode-Review {
         $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — à valider' 0.1)   $Dm$($State.id)$R")
         $L.Add("  $B$($State.summary)$R")
         $L.Add((Stepper 5))
-        $L.Add((Now 'V = LIRE le résultat · F = le mettre dans ton projet · N = nouvelle demande (celui-ci reste à valider)')); $L.Add('')
+        $L.Add((Attn 'V = LIRE le résultat · F = le mettre dans ton projet · N = nouvelle demande (celui-ci reste à valider)' '⚑ FLOW : le travail est prêt à valider')); $L.Add('')
         $changed = @(Changed-Files $iw $State.base)
         $merged = @($State.integration.merged); $skipped = @($State.integration.skipped)
         $L.Add("  $Dm branche d'intégration$R $ib   $Dm dossier$R $iw")

@@ -293,7 +293,7 @@ function Show-WorkflowDraft([string]$msg) {
     $W = [Math]::Max(40, (ConW) - 1)
     $L = [Collections.Generic.List[string]]::new()
     $L.Add(''); $L.Add("  $(Grad '⚑ WORKFLOW — vérifie avant de valider' 0.1)   $B$(Split-Path $RepoRoot -Leaf)$R")
-    $L.Add((Now 'lis le cahier et la feuille de route. Entrée = valider · E = modifier à la main · R = refaire avec une précision'))
+    $L.Add((Attn 'lis le cahier et la feuille de route. Entrée = valider · E = modifier à la main · R = refaire avec une précision' '⚑ FLOW : le workflow attend ta validation'))
     $L.Add('')
     $cahier = Get-Content -LiteralPath (Wf-File 'CAHIER.md') -Raw -Encoding utf8
     foreach ($sec in 'Vision', 'Critère de réussite') {

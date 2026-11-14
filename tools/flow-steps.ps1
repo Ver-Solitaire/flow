@@ -268,7 +268,7 @@ function Show-SpecDraft($spec, $step, [string]$msg) {
     $W = [Math]::Max(40, (ConW) - 1)
     $L = [Collections.Generic.List[string]]::new()
     $L.Add(''); $L.Add("  $(Grad '⚑ ÉTAPE — vérifie la spécification' 0.1)   $B$($step.id)$R $($step.titre)")
-    $L.Add((Now 'Entrée = valider et CONSTRUIRE · E = modifier à la main · R = refaire avec une précision · Échap = plus tard'))
+    $L.Add((Attn 'Entrée = valider et CONSTRUIRE · E = modifier à la main · R = refaire avec une précision · Échap = plus tard' '⚑ FLOW : une spécification attend ta validation'))
     $L.Add('')
     foreach ($x in @(Chunks $spec.resume ($W - 6)) | Select-Object -First 4) { $L.Add("    $x") }
     $L.Add('')
