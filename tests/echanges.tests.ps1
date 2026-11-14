@@ -6,6 +6,7 @@ BeforeAll {
     $global:Base = Join-Path ([IO.Path]::GetTempPath()) ('flowech-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     New-Item -ItemType Directory -Force $global:Base | Out-Null
     . (Join-Path $global:FlowRoot 'tools\flow-team.ps1') -LoadOnly -Repo $global:Base
+    $global:FlowNoAi = $true      # rien n'est écrit dans la vraie mémoire de l'utilisateur
     foreach ($n in 'RepoRoot', 'RunDir', 'WtRoot', 'State', 'Cfg', 'Psmux', 'GitCode') { Remove-Variable -Name $n -Scope Local -ErrorAction SilentlyContinue }
     $global:FlowLogFile = Join-Path $global:Base 'flow.log'
     function Notify { }

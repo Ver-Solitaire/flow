@@ -333,6 +333,20 @@ Pour obtenir exactement le résultat voulu, **FLOW te pose des questions à chaq
 
 Pour chaque question : **↑↓ ou 1-4** pour choisir (ou clic), **Entrée** pour valider, **T** pour répondre avec tes mots, **S** pour dire « décide à ma place » (la recommandation est prise), **←** pour revenir à la question précédente, **Échap** pour passer les questions. Tes réponses sont dans `precisions.md` de l'équipe et dans son brief : tous les Claude les voient. Le lancement automatique du plan est désactivé en mode guidé.
 
+### Mémoire de ta façon de travailler (F8)
+
+FLOW apprend **comment tu travailles** et en garde une mémoire **locale**, pour que les prochains Claude t'aident mieux sans te redemander ce que tu as déjà montré. Rien n'est envoyé ailleurs : tout est dans `%LOCALAPPDATA%\FLOW\profil\`, hors de tes projets et de Git.
+
+| Fichier | Contenu |
+|---|---|
+| `profil.md` | le **profil** en langage naturel : comment tu décides, demandes, ce que tu corriges, ton rythme, ce qu'il faut proposer ou éviter, et ce qu'on ignore encore. Chaque affirmation indique sa confiance (« observé 5 fois », « une seule fois : hypothèse ») ; ce qui est démenti est remplacé. |
+| `evenements.jsonl` | le **journal d'activité** : tes demandes, tes réponses aux questions guidées, les changements que tu apportes aux plans, tes messages aux ouvriers, tes retours « presque / non », les livraisons et abandons, le verdict du juge, le quota des comptes avant et après, et pour chaque appel Claude son modèle, sa durée, ses jetons et son coût. |
+| `conversations\` | une copie des **conversations des Claude** de chaque équipe (jetons, outils et interventions sont aussi relevés), **secrets masqués** (clés d'API, jetons, mots de passe). |
+
+À la fin de chaque équipe (livrée, jetée ou à ajuster), un Claude met le profil à jour à partir des nouveaux événements. Le profil est ensuite transmis au planificateur, au guide et aux ouvriers comme **hypothèses** (ils ne le citent pas, tu gardes le dernier mot) ; le guide s'en sert pour ne pas redemander ce qu'il sait déjà.
+
+L'écran **F8** (depuis l'écran de demande) montre où ça en est (nombre d'événements, usage, taille des conversations) et permet de **lire** le profil (**L**), le **mettre à jour** (**R**), l'**éditer** à la main (**E**), **ouvrir** le dossier (**O**), **couper** le journal (**C**), les conversations (**V**) ou la transmission du profil aux Claude (**I**), et **tout effacer** (**X**, avec confirmation). Les données sont lisibles : à toi de les exploiter (Excel, scripts…).
+
 Prérequis : **Git**, et un projet sous Git (sinon la fenêtre propose `git init` + premier commit).
 
 ### Sur n'importe quel projet

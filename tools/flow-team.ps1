@@ -136,6 +136,7 @@ $GitExe = Find-Git
 . (Join-Path $PSScriptRoot 'flow-input.ps1')   # clavier + souris (clics)
 . (Join-Path $PSScriptRoot 'flow-common.ps1')  # écritures atomiques, Q, journal
 . (Join-Path $PSScriptRoot 'flow-claudemd.ps1')  # création d'un CLAUDE.md de départ
+. (Join-Path $PSScriptRoot 'flow-profile.ps1')  # mémoire locale de la façon de travailler de l'utilisateur
 $global:FlowLogFile = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\config\flow.log'))
 $GitId = @()
 $GitCode = 0
@@ -543,6 +544,7 @@ function Topo($tasks) {
 function Planner-Prompt([string]$request, [string]$extra) {
     $n = @(Usable-Accounts).Count
     $more = if ($extra) { "`nPRÉCISION DE L'UTILISATEUR SUR LE PLAN PRÉCÉDENT :`n$extra`n" } else { '' }
+    $more += (Profile-Block)
     if ("$($State.precisions)".Trim()) { $more += "`nRÉPONSES DE L'UTILISATEUR À TES QUESTIONS (elles font foi : respecte-les dans le brief et les tâches) :`n$($State.precisions)`n" }
     if ($State.guided) { $more += "`nMODE GUIDÉ : l'utilisateur veut décider des choix importants. Dans « questions » (0 à 5), liste les VRAIES décisions de conception encore ouvertes après ses réponses (même format que ci-dessous, la réponse recommandée en premier) ; dans le plan, prends l'option recommandée. Liste vide si tout est tranché.`n" }
     @"
@@ -639,8 +641,8 @@ function Conventions-Text {
 
 # ── mode GUIDÉ : FLOW pose des questions à chaque étape (avant le plan, au plan, pendant le travail, à la validation) ──
 $GuidedPrefFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'config\team-prefs.json'
-function Load-GuidedPref { try { if (Test-Path -LiteralPath $GuidedPrefFile) { return [bool]((Get-Content -LiteralPath $GuidedPrefFile -Raw -Encoding utf8 | ConvertFrom-Json).guided) } } catch {}; $false }
-function Save-GuidedPref([bool]$on) { try { Write-JsonAtomic ([ordered]@{ guided = $on }) $GuidedPrefFile } catch {} }
+function Load-GuidedPref { [bool](Get-Prefs).guided }
+function Save-GuidedPref([bool]$on) { Set-Pref 'guided' $on }
 $global:FlowGuided = Load-GuidedPref
 $global:FlowPrefill = ''     # texte proposé à la prochaine demande (ajustement après la validation)
 $global:FlowNextBase = ''    # branche de départ de la prochaine demande (le travail précédent, pour un ajustement)
@@ -649,6 +651,7 @@ function Valid-Questions($raw) { @(@($raw) | Where-Object { $_ -and "$($_.questi
 
 function Questioner-Prompt([int]$round) {
     $prev = if ("$($State.precisions)".Trim()) { "`nRÉPONSES DÉJÀ DONNÉES PAR L'UTILISATEUR :`n$($State.precisions)`n" } else { '' }
+    $prev += (Profile-Block)
     $howMany = if ($round -le 1) { 'entre 4 et 8 questions' } else { 'au plus 4 questions, SEULEMENT celles qui restent vraiment ouvertes après ses réponses (renvoie une liste vide s''il n''en reste aucune)' }
     @"
 Tu es le GUIDE d'une équipe de Claude. Avant de découper le travail, tu aides l'utilisateur à préciser COMMENT parvenir au résultat
@@ -659,7 +662,7 @@ DEMANDE DE L'UTILISATEUR :
 $($State.prompt)
 >>>
 $prev
-1. Explore le projet en lecture seule (Read, Grep, Glob), juste assez pour poser des questions PERTINENTES : ne demande jamais ce qui se lit dans le code, le README ou le CLAUDE.md.
+1. Explore le projet en lecture seule (Read, Grep, Glob), juste assez pour poser des questions PERTINENTES : ne demande jamais ce qui se lit dans le code, le README ou le CLAUDE.md, ni ce que son profil de travail (ci-dessus, s'il existe) montre déjà avec certitude.
 2. Pose $howMany sur la façon d'atteindre le résultat voulu : l'objectif réel et pour qui ; à quoi on reconnaîtra que c'est réussi ;
    les contraintes (technologies, compatibilité, style, délais) ; les choix de conception importants et leurs conséquences ; le périmètre
    (ce qui est inclus ET ce qui est exclu) ; les priorités ; comment vérifier (tests, démonstration) ; ce qu'il ne faut surtout pas casser.
@@ -758,12 +761,154 @@ function Invoke-Discovery {
         $job = Start-ClaudeJob $RepoRoot $acct $pf 'opus' 'Read,Grep,Glob'
         $res = Wait-Job-Spinner $job "le guide (opus, $($acct.Label)) étudie le projet et prépare ses questions…"
         if ($null -eq $res) { return }
+        Log-Call 'guide' $acct 'opus' $res
         $j = Parse-ClaudeJson "$($res.Out)"
         $qs = @(Valid-Questions $j.questions)
         if (-not $qs.Count) { break }
         $ans = Ask-Questions $qs '⚑ ÉQUIPE — guidé : précisons le résultat' $(if ($round -gt 1) { 'Quelques précisions encore, d''après tes réponses.' } else { 'Réponds à ton rythme : tu pourras toujours décider plus tard.' })
         if ($null -eq $ans) { break }
+        Log-Answers $qs $ans 'avant_plan'
         Add-Precisions (Format-Answers $qs $ans)
+    }
+}
+
+# ── collecte : journal d'activité, usage, décisions (voir tools\flow-profile.ps1) ──
+function Log-Call([string]$role, $acct, [string]$model, $res) {
+    # coût et jetons d'un appel « claude -p » (enveloppe JSON), pour le journal d'usage
+    try {
+        $j = $null; try { $j = "$($res.Out)" | ConvertFrom-Json -ErrorAction Stop } catch {}
+        Write-Event 'appel_claude' @{ role = $role; compte = "$($acct.Id)"; modele = $model; duree_ms = $j.duration_ms; tours = $j.num_turns
+            cout_usd = $j.total_cost_usd; entrees = $j.usage.input_tokens; sorties = $j.usage.output_tokens; cache_lecture = $j.usage.cache_read_input_tokens; erreur = [bool]$j.is_error }
+    } catch {}
+}
+function Log-Quota([string]$moment) {
+    try { Write-Event 'quota' @{ moment = $moment; comptes = @($Accs | ForEach-Object { @{ id = $_.Id; charge_pct = [int](Acct-Load $_) } }) } } catch {}
+}
+function Log-Answers($qs, $ans, [string]$phase) {
+    $qs = @(Valid-Questions $qs)
+    for ($i = 0; $i -lt $qs.Count; $i++) {
+        $an = $ans[$i]; if (-not $an) { continue }
+        Write-Event 'reponse_guidee' @{ phase = $phase; question = "$($qs[$i].question)"; reponse = "$($an.a)"; mode = "$($an.mode)"; recommandee = ($an.idx -eq 0 -and $an.mode -ne 'libre') }
+    }
+}
+function Plan-Snapshot { @($State.tasks | ForEach-Object { [pscustomobject]@{ id = $_.id; title = $_.title; model = $_.model; account = $_.account } }) }
+function Plan-Changes {
+    # ce que l'utilisateur a changé dans le plan proposé par le planificateur
+    $o = @(); $orig = @($State.planOrig)
+    if (-not $orig.Count) { return @() }
+    foreach ($t in @($State.tasks)) {
+        $p = $orig | Where-Object { $_.id -eq $t.id } | Select-Object -First 1
+        if (-not $p) { $o += "tâche $($t.id) ajoutée"; continue }
+        if ($p.model -ne $t.model) { $o += "tâche $($t.id) : modèle $($p.model) → $($t.model)" }
+        if ($p.account -ne $t.account) { $o += "tâche $($t.id) : compte $($p.account) → $($t.account)" }
+        if ($p.title -ne $t.title) { $o += "tâche $($t.id) : titre modifié" }
+    }
+    foreach ($p in $orig) { if (-not (Task-ById $p.id)) { $o += "tâche $($p.id) retirée" } }
+    $o
+}
+function Log-TaskDone($t) {
+    # fin d'une tâche : durée, jetons de la conversation de l'ouvrier, copie (secrets masqués) de cette conversation
+    $tr = $null; try { $tr = Worker-Transcript $t } catch {}
+    $u = $null; $arch = $null
+    if ($tr) { $u = Transcript-Usage $tr; $arch = Archive-Transcript $tr "$($t.id)-$($t.model)-$($t.account)" }
+    $mins = $null; try { $mins = [int]((Get-Date) - [datetime]$t.startedAt).TotalMinutes } catch {}
+    Write-Event 'tache_terminee' @{ tache = $t.id; titre = $t.title; modele = $t.model; compte = $t.account; minutes = $mins; relectures = [int]$t.reviews; relecture = "$($t.review)"; usage = $u; conversation = $arch }
+}
+
+function Open-TextWindow([string]$name, [string[]]$lines) {
+    # texte long lu dans une fenêtre psmux à part (la molette y défile) ; hors psmux : le Bloc-notes
+    $view = Join-Path $env:TEMP "flow-$name.txt"
+    [IO.File]::WriteAllText($view, ($lines -join "`n"), [Text.UTF8Encoding]::new($false))
+    if (-not $Psmux) { Start-Process notepad.exe -ArgumentList "`"$view`""; return }
+    $runner = Join-Path $env:TEMP "flow-$name.ps1"
+    Write-TextAtomic $runner "[Console]::OutputEncoding = [Text.Encoding]::UTF8`nClear-Host`nGet-Content -LiteralPath $(Q $view) -Raw -Encoding utf8 | Write-Host`nWrite-Host ''`nWrite-Host '── fin · molette pour remonter · q puis une touche pour fermer cette fenêtre ──' -ForegroundColor Yellow`n[void][Console]::ReadKey(`$true)`n"
+    & psmux -L $Sock kill-window -t "${Session}:$name" *> $null
+    & psmux -L $Sock new-window -t $Session -n $name "pwsh -NoProfile -File `"$runner`"" *> $null
+    & psmux -L $Sock select-window -t "${Session}:$name" *> $null
+    $last = -1; $stable = 0
+    for ($w8 = 0; $w8 -lt 40 -and $stable -lt 3; $w8++) {
+        Start-Sleep -Milliseconds 150
+        $hs = "$(& psmux -L $Sock display-message -t "${Session}:$name" -p '#{history_size}' 2>$null)"
+        if ($hs -eq $last -and $hs) { $stable++ } else { $stable = 0; $last = $hs }
+    }
+    Start-Sleep -Milliseconds 400
+    & psmux -L $Sock copy-mode -t "${Session}:$name" *> $null
+    for ($w8 = 0; $w8 -lt 6; $w8++) {
+        Start-Sleep -Milliseconds 300
+        & psmux -L $Sock send-keys -t "${Session}:$name" -X history-top *> $null
+        Start-Sleep -Milliseconds 200
+        $pp = "$(& psmux -L $Sock display-message -t "${Session}:$name" -p '#{scroll_position}/#{history_size}' 2>$null)" -split '/'
+        if ($pp.Count -eq 2 -and $pp[0] -eq $pp[1]) { break }
+    }
+}
+
+function Mode-Memory {
+    # ce que FLOW sait de ta façon de travailler : profil, journal, conversations ; réglages ; effacement
+    $msg = ''
+    Cls
+    while ($true) {
+        $W = [Math]::Max(40, (ConW) - 1)
+        $s = Profile-Stats; $p = Get-Prefs
+        $chk = { param($on) if ($on) { "$Ok✓$R" } else { "$Dm○$R" } }
+        $L = [Collections.Generic.List[string]]::new()
+        $L.Add(''); $L.Add("  $(Grad '⚑ MÉMOIRE — comment tu travailles' 0.1)")
+        $L.Add("  $Dm Tout reste sur ce PC, hors de tes projets : $($s.Dossier)$R")
+        $L.Add($(if ($s.ProfilExiste) { Now 'L pour lire ton profil de travail · R pour le mettre à jour maintenant' } else { Now 'pas encore de profil : il se crée après quelques équipes (ou R pour le créer tout de suite)' }))
+        $L.Add('')
+        $L.Add("  $B Profil$R   $(if ($s.ProfilExiste) { "mis à jour le $($s.ProfilMaj)" } else { 'aucun' }) $Dm· basé sur $($s.Equipes) équipe(s) · $($s.Evenements) événement(s) dont $($s.Nouveaux) pas encore analysé(s)$R")
+        $L.Add("  $B Usage$R    $($s.Appels) appel(s) Claude de FLOW · $([Math]::Round($s.JetonsEntree / 1000)) k jetons en entrée, $([Math]::Round($s.JetonsSortie / 1000)) k en sortie · coût API équivalent $([Math]::Round($s.CoutUsd, 2)) $")
+        $L.Add("  $B Conversations$R  $($s.Conversations) fichier(s), $($s.ConversationsMo) Mo (secrets masqués)")
+        if ($s.Types.Count) { $L.Add("  $Dm Événements : $($s.Types -join ' · ')$R") }
+        $L.Add('')
+        $L.Add("  $B Réglages$R   $(& $chk $p.collecte) journal d'activité $Dm(C)$R   $(& $chk $p.conversations) conversations des Claude $Dm(V)$R   $(& $chk $p.profil) profil transmis aux Claude $Dm(I)$R")
+        $L.Add("  $Dm Le profil est lu par les Claude de tes équipes comme le reste de leur consigne ; le journal et les conversations ne quittent pas ce PC.$R")
+        if ($s.Derniers.Count) {
+            $L.Add(''); $L.Add("  $B Derniers événements$R")
+            foreach ($d in $s.Derniers) {
+                $line = ($d -replace '\s+', ' ')
+                try {
+                    $eo = $d | ConvertFrom-Json -ErrorAction Stop
+                    $what = @($eo.texte, $eo.retour, $eo.reponse, $eo.question, $eo.titre, $eo.resume, $eo.role, $eo.reglage) | Where-Object { $_ } | Select-Object -First 1
+                    $line = "$(([datetime]$eo.t).ToString('HH:mm')) $($eo.type)$(if ($eo.projet) { " ($($eo.projet))" }) — $what"
+                } catch {}
+                $L.Add("    $Dm$(Fit $line ($W - 8))$R")
+            }
+        }
+        $L.Add('')
+        $L.Add((Keys @('L', 'lire le profil', 'R', 'mettre à jour', 'E', 'éditer', 'O', 'ouvrir le dossier', 'C', 'journal', 'V', 'conversations', 'I', 'profil aux Claude', 'X', 'tout effacer', 'Échap', 'retour')))
+        if ($msg) { $L.Add("  $msg") }
+        Show-Frame $L
+        $k = Read-KeyOrHint; $ch = "$($k.KeyChar)".ToLower()
+        if ($k.Key -eq 'Escape') { return 'quit' }
+        elseif ($ch -eq 'l') {
+            $pf = Join-Path $s.Dossier 'profil.md'
+            if (Test-Path -LiteralPath $pf) { Open-TextWindow 'profil' @(Render-Md @(Get-Content -LiteralPath $pf -Encoding utf8) 100); $msg = "$Dm profil ouvert dans la fenêtre « profil » (q puis une touche pour la fermer)$R" }
+            else { $msg = "$Warn pas encore de profil : R pour le créer à partir des événements déjà enregistrés$R" }
+        }
+        elseif ($ch -eq 'r') {
+            $done = Update-Profile -Force
+            Cls
+            $msg = if ($done) { "$Ok✓ profil mis à jour$R" } else { "$Warn rien à analyser pour l'instant (aucun événement), ou la mise à jour a échoué$R" }
+        }
+        elseif ($ch -eq 'e') {
+            New-Item -ItemType Directory -Force $s.Dossier | Out-Null
+            $pf = Join-Path $s.Dossier 'profil.md'
+            if (-not (Test-Path -LiteralPath $pf)) { Set-Content -LiteralPath $pf "# Profil de travail`n`n(à compléter)`n" -Encoding utf8 }
+            Start-Process notepad.exe -ArgumentList "`"$pf`"" -Wait
+            $msg = "$Ok✓ profil enregistré$R"
+        }
+        elseif ($ch -eq 'o') { New-Item -ItemType Directory -Force $s.Dossier | Out-Null; Start-Process explorer.exe -ArgumentList "`"$($s.Dossier)`""; $msg = '' }
+        elseif ($ch -eq 'c') { Set-Pref 'collecte' (-not $p.collecte) }
+        elseif ($ch -eq 'v') { Set-Pref 'conversations' (-not $p.conversations) }
+        elseif ($ch -eq 'i') { Set-Pref 'profil' (-not $p.profil) }
+        elseif ($ch -eq 'x') {
+            $k2 = Message-Screen '⚑ MÉMOIRE — tout effacer ?' @("Le journal, les conversations archivées et le profil seront supprimés pour de bon :", "$($s.Dossier)", '', 'Tes projets ne sont pas touchés.') @('O', 'tout effacer', 'Échap', 'annuler')
+            Cls
+            if ("$($k2.KeyChar)".ToLower() -eq 'o') {
+                Remove-Item -LiteralPath $s.Dossier -Recurse -Force -ErrorAction SilentlyContinue
+                $msg = "$Ok✓ mémoire effacée$R"
+            }
+        }
     }
 }
 
@@ -824,7 +969,8 @@ function Start-ClaudeJob([string]$cwd, $acct, [string]$promptFile, [string]$mode
         Set-Location -LiteralPath $cwd
         [Console]::OutputEncoding = [Text.Encoding]::UTF8
         if ($dir) { $env:CLAUDE_CONFIG_DIR = $dir } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
-        $out = & claude -p $msg --model $model --output-format json --allowedTools $tools --add-dir $runDir 2>&1 | Out-String
+        $more = if ($runDir) { @('--add-dir', $runDir) } else { @() }
+        $out = & claude -p $msg --model $model --output-format json --allowedTools $tools @more 2>&1 | Out-String
         [pscustomobject]@{ Code = $LASTEXITCODE; Out = $out }
     } -ArgumentList $cwd, $acct.Dir, $msg, $RunDir, $model, $tools
 }
@@ -887,7 +1033,7 @@ complexe que prévu : écris ta question dans $(Help-File $t.id) (le contexte, c
 puis attends. Le conseiller étudie ton travail et répond dans $(Advice-File $t.id) ; tu recevras un message ici.
 L'utilisateur peut aussi t'écrire directement dans ce panneau.
 $conv
-$(Guardrails-Text)
+$(Guardrails-Text)$(Profile-Block)
 "@
 }
 
@@ -1073,7 +1219,7 @@ function Read-Prompt([string]$initial) {
         }
         $L.Add("  $bc╰$('─' * ($W - 5))╯$R")
         $L.Add("  $B$Teal▶ F5 ou Ctrl+D = ENVOYER la demande à l'équipe$R  $Dm(Entrée = nouvelle ligne)$R$(if ($lines.Count -and ($lines -join '').Trim()) { "  $Warn← pas encore envoyée$R" })")
-        $L.Add((Keys @('F5 / Ctrl+D', 'envoyer', 'Entrée', 'nouvelle ligne', 'F2', 'profil du projet', 'F3', 'changer de projet', 'F4', 'comptes', 'F6', 'plans en attente', 'F7', 'mode guidé')))
+        $L.Add((Keys @('F5 / Ctrl+D', 'envoyer', 'Entrée', 'nouvelle ligne', 'F2', 'profil du projet', 'F3', 'changer de projet', 'F4', 'comptes', 'F6', 'plans en attente', 'F7', 'mode guidé', 'F8', 'mémoire')))
         Show-Frame $L
         $k = (Read-KeyOrHint)
         $ctrl = [bool]($k.Modifiers -band [ConsoleModifiers]::Control)
@@ -1082,6 +1228,7 @@ function Read-Prompt([string]$initial) {
         if ($k.Key -eq 'F3') { return '::project' }
         if ($k.Key -eq 'F4') { [void](Connect-Missing); continue }
         if ($k.Key -eq 'F6') { return '::home' }
+        if ($k.Key -eq 'F8') { return '::memoire' }
         if ($k.Key -eq 'F7') { $global:FlowGuided = -not $global:FlowGuided; Save-GuidedPref $global:FlowGuided; continue }
         if ($k.Key -eq 'F5' -or ($ctrl -and $k.Key -eq 'D')) {
             $t = ($lines -join "`n").Trim()
@@ -1316,6 +1463,7 @@ function Mode-Home {
     if ($req -eq '::profile') { return 'profile' }
     if ($req -eq '::project') { return 'project' }
     if ($req -eq '::home') { return 'home' }
+    if ($req -eq '::memoire') { return 'memoire' }
 
     # point de départ : la branche cible du profil, sinon le dernier commit de la branche actuelle
     $baseRef = if ($Cfg.targetBranch) { [string]$Cfg.targetBranch } else { 'HEAD' }
@@ -1346,6 +1494,8 @@ function Mode-Home {
     New-Item -ItemType Directory -Force $RunDir | Out-Null
     Set-Content -LiteralPath (Join-Path $RunDir 'demande.md') $req -Encoding utf8
     Save-State
+    Write-Event 'demande' @{ texte = $req; guide = [bool]$State.guided; origine = $(if ($nextBase) { 'ajustement' } else { 'nouvelle' }) }
+    Log-Quota 'debut'
     if ($State.guided) { Invoke-Discovery }
     if (Invoke-Planner '') { return 'plan' }
     'home'
@@ -1360,6 +1510,7 @@ function Invoke-Planner([string]$extra, [switch]$NoQuestions) {
     $job = Start-ClaudeJob $RepoRoot $acct $pf 'opus' 'Read,Grep,Glob'
     $res = Wait-Job-Spinner $job "le planificateur (opus, $($acct.Label)) étudie le projet, découpe la demande et choisit les modèles…"
     if ($null -eq $res) { return $false }
+    Log-Call 'planificateur' $acct 'opus' $res
     Set-Content -LiteralPath (Join-Path $RunDir 'planificateur-sortie.txt') $res.Out -Encoding utf8
     $plan = $null; $why = ''
     try {
@@ -1377,12 +1528,15 @@ function Invoke-Planner([string]$extra, [switch]$NoQuestions) {
         return $false
     }
     Apply-Plan $plan
+    $State | Add-Member -NotePropertyName planOrig -NotePropertyValue @(Plan-Snapshot) -Force   # le plan tel que proposé : on saura ce que l'utilisateur change
+    Write-Event 'plan' @{ taches = @($State.tasks).Count; modeles = @($State.tasks | ForEach-Object { $_.model }); passe = (Depth); resume = $State.summary }
     if ($State.guided -and -not $NoQuestions) {
         $pq = @(Valid-Questions $plan.questions | Select-Object -First 5)
         if ($pq.Count) {
             $ans = Ask-Questions $pq '⚑ ÉQUIPE — guidé : décisions du plan' 'Le plan est prêt ; ces choix restent à trancher.'
             if ($null -ne $ans) {
                 $block = Format-Answers $pq $ans
+                Log-Answers $pq $ans 'decisions_plan'
                 Add-Precisions $block
                 $State.brief = "$($State.brief)`n`n## Décisions de l'utilisateur (après le plan)`n$block"
                 Save-State
@@ -1586,14 +1740,14 @@ function Mode-Plan {
         $ch = "$($k.KeyChar)".ToLower()
         if ($k.Key -eq 'UpArrow') { $sel = ($sel - 1 + $ts.Count) % $ts.Count }
         elseif ($k.Key -eq 'DownArrow') { $sel = ($sel + 1) % $ts.Count }
-        elseif ($ch -eq 'm') { $t.model = $Models[([array]::IndexOf($Models, [string]$t.model) + 1) % $Models.Count]; $t.why = 'choisi à la main'; Save-State }
+        elseif ($ch -eq 'm') { $t.model = $Models[([array]::IndexOf($Models, [string]$t.model) + 1) % $Models.Count]; $t.why = 'choisi à la main'; Save-State; Write-Event 'plan_reglage' @{ reglage = 'modele'; tache = $t.id; vers = $t.model } }
         elseif ($k.Key -eq 'Tab') {
             $ids = @($Accs.Id); $cur = [array]::IndexOf($ids, $t.account)
-            $t.account = $ids[($cur + 1) % $ids.Count]; Save-State
+            $t.account = $ids[($cur + 1) % $ids.Count]; Save-State; Write-Event 'plan_reglage' @{ reglage = 'compte'; tache = $t.id; vers = $t.account }
         }
         elseif ($ch -eq 'a') { Assign-Accounts $ts; Save-State }
-        elseif ($ch -eq 'v') { $State.crossReview = -not $State.crossReview; Save-State }
-        elseif ($ch -eq 'p') { $State.depth = if ((Depth) -eq 'light') { 'full' } else { 'light' }; Save-State }
+        elseif ($ch -eq 'v') { $State.crossReview = -not $State.crossReview; Save-State; Write-Event 'plan_reglage' @{ reglage = 'relecture'; vers = [bool]$State.crossReview } }
+        elseif ($ch -eq 'p') { $State.depth = if ((Depth) -eq 'light') { 'full' } else { 'light' }; Save-State; Write-Event 'plan_reglage' @{ reglage = 'passe'; vers = (Depth) } }
         elseif ($ch -eq 'c') {
             if (-not @(Missing-Accounts).Count) { [void](Message-Screen '⚑ ÉQUIPE — comptes' @("$Ok Tous les comptes sont connectés :$R $(Accounts-Line)") @('Entrée', 'retour')) }
             elseif ((Connect-Missing) -gt 0) { Assign-Accounts $ts; Save-State }   # un compte de plus : nouvelle répartition
@@ -1614,6 +1768,7 @@ function Mode-Plan {
             }
             Write-TaskFiles
             $State.status = 'running'; Save-State
+            Write-Event 'plan_valide' @{ modifications = @(Plan-Changes); passe = (Depth); relecture = [bool]$State.crossReview; taches = @($State.tasks).Count; guide = [bool]$State.guided }
             return 'run'
         }
         elseif ($ch -eq 'e') {
@@ -1632,6 +1787,7 @@ function Mode-Plan {
         }
         elseif ($ch -eq 'r') {
             $extra = Read-Line '⚑ ÉQUIPE — replanifier' 'Qu''est-ce qui ne va pas dans ce plan ? (laisser vide pour simplement recommencer)'
+            if ($extra) { Write-Event 'plan_precision' @{ texte = $extra } }
             if ($null -ne $extra) { if (-not (Invoke-Planner $extra)) { return 'home' } }
             $sel = 0; Cls
         }
@@ -1639,7 +1795,7 @@ function Mode-Plan {
         elseif ($ch -eq 'x') {
             $k2 = Message-Screen '⚑ ÉQUIPE — abandonner ce plan ?' @('Le plan sera supprimé ; aucune copie de travail n''a encore été créée.') @('O', 'abandonner', 'Échap', 'garder')
             Cls
-            if ("$($k2.KeyChar)".ToLower() -eq 'o') { $State.status = 'discarded'; Save-State; return 'home' }
+            if ("$($k2.KeyChar)".ToLower() -eq 'o') { $State.status = 'discarded'; Save-State; Write-Event 'plan_abandonne' @{ resume = $State.summary }; return 'home' }
         }
     }
 }
@@ -1849,6 +2005,7 @@ function Check-Reviews {
         }
         $rv = Receive-Job $a.Job; Remove-Job $a.Job -Force; $RevJobs.Remove($id)
         $t = Task-ById $id
+        Log-Call $(if ($a.Phase -eq 'verify') { 'contre-verification' } else { 'relecture' }) $a.Acct $a.Model $rv
         $parsed = Parse-ClaudeJson "$($rv.Out)"
         $head = "`n---`n## $(if ($a.Phase -eq 'verify') { 'Contre-vérification' } else { 'Relecture' }) n°$($a.Round) du $(Get-Date -Format 'HH:mm') — par $($a.Acct.Label) ($($a.Model))`n`n"
 
@@ -1925,6 +2082,7 @@ function Write-Exchange {
     try {
         $o = [ordered]@{ t = (Get-Date).ToString('HH:mm:ss'); from = $From; fromAcct = $FromAcct; to = $To; toAcct = $ToAcct; kind = $Kind; text = (($Text -replace '\s+', ' ').Trim()) }
         Add-Content -LiteralPath (Join-Path $RunDir 'echanges.jsonl') -Value ($o | ConvertTo-Json -Compress) -Encoding utf8
+        Write-Event 'echange' @{ genre = $Kind; de = $From; vers = $To; texte = $o.text }
     } catch {}
 }
 
@@ -1972,6 +2130,7 @@ function Finish-Task($t) {
     $rel = if ([int]$t.reviews -and $t.review -ne 'impossible') { ' et relue' } else { '' }
     if ($Psmux) { Set-PaneState $t.id 'done' "✓ terminé$(if ($rel) { ' · relu' })" }
     Notify "✓ Tâche $($t.id) terminée$rel" $t.title
+    try { Log-TaskDone $t } catch {}
     Tell-Others $t.id "[FLOW] Info équipe : la tâche $($t.id) ($($t.title)) est terminée$rel. Compte-rendu : $(Result-File $t.id). Son code est sur la branche $(Task-Branch $t) (lecture : git show $(Task-Branch $t):<chemin>). Si ta tâche s'y raccorde, vérifie que tu utilises bien ses noms et ses formats ; sinon continue sans t'interrompre."
 }
 
@@ -2159,12 +2318,13 @@ function Mode-Run {
                 else {
                     $why = Read-Line "⚑ ÉQUIPE — conseiller pour $($t.id)" 'Qu''est-ce qui coince ? (facultatif, Entrée pour laisser le conseiller juger)'
                     Cls
-                    if ($null -ne $why) { Start-Advisor $t $(if ($why) { "l'utilisateur signale : $why" } else { 'l''utilisateur demande un avis sur la tâche' }); $msg = "$Info◈ conseiller $(Advisor-Model $t.model) appelé pour $($t.id)$R" }
+                    if ($null -ne $why) { Write-Event 'conseiller_appele' @{ tache = $t.id; raison = $why }; Start-Advisor $t $(if ($why) { "l'utilisateur signale : $why" } else { 'l''utilisateur demande un avis sur la tâche' }); $msg = "$Info◈ conseiller $(Advisor-Model $t.model) appelé pour $($t.id)$R" }
                 }
             }
             elseif ($ch -eq 'v') { $State.crossReview = -not $State.crossReview; Save-State; $msg = "$Info relecture croisée $(if ($State.crossReview) { 'activée' } else { 'désactivée' }) pour les tâches à venir$R" }
             elseif ($ch -eq 't' -and $t.status -eq 'running') {
                 $t.review = 'ok'   # décision de l'utilisateur : acceptée sans (autre) relecture
+                Write-Event 'tache_acceptee_a_la_main' @{ tache = $t.id; titre = $t.title }
                 if (-not (Test-Path -LiteralPath (Result-File $t.id))) {
                     Set-Content -LiteralPath (Result-File $t.id) "# Tâche $($t.id)`n`n(marquée terminée à la main par l'utilisateur)`n" -Encoding utf8
                 }
@@ -2184,13 +2344,14 @@ function Mode-Run {
                     foreach ($x in $left) { $x.status = 'failed'; $x.error = 'laissée de côté' }
                 }
                 $State.status = 'integrating'; Save-State
+                Write-Event 'integration_anticipee' @{ restantes = @($left.id) }
                 return 'integrate'
             }
             elseif ($k.Key -eq 'Escape') { Save-State; return 'home' }   # retour : les Claude continuent, Entrée sur l'équipe pour reprendre le suivi
             elseif ($ch -eq 'x') {
                 $go = Confirm-Discard '⚑ ÉQUIPE — abandonner l''équipe ?'
                 Cls
-                if ($go) { $arch = @(Cleanup-Run -Abandon); $State.status = 'discarded'; Save-State; Show-Archive $arch; return 'home' }
+                if ($go) { Write-Event 'equipe_abandonnee' @{ resume = $State.summary }; $arch = @(Cleanup-Run -Abandon); $State.status = 'discarded'; Save-State; Show-Archive $arch; return 'home' }
             }
         }
     }
@@ -2283,6 +2444,7 @@ function Invoke-Scribe([string]$iw) {
     $job = Start-ClaudeJob $iw $acct $pf 'sonnet' 'Read,Grep,Glob,Edit,Write'
     $res = Wait-Job-Spinner $job "le scribe (sonnet, $($acct.Label)) met à jour la mémoire du projet (memoire\)…"
     if ($null -eq $res) { Set-IntProp 'scribe' 'annulé'; Save-State; return }
+    Log-Call 'scribe' $acct 'sonnet' $res
     Set-Content -LiteralPath (Join-Path $RunDir 'scribe-sortie.txt') "$($res.Out)" -Encoding utf8
     $st = @(Git-In $iw @('-c', 'core.quotepath=false', 'status', '--porcelain', '-uall') | Where-Object { "$_".Trim() })
     $inMem = @(); $outside = @()
@@ -2342,6 +2504,7 @@ function Invoke-Judge([string]$iw) {
     $job = Start-ClaudeJob $iw $acct $pf 'opus' 'Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*)'
     $res = Wait-Job-Spinner $job "le juge (opus, $($acct.Label)) vérifie le résultat contre la demande et les critères…"
     if ($null -eq $res) { Set-IntProp 'judge' ([pscustomobject]@{ ok = $null; summary = 'jugement annulé'; unmet = @(); rechecked = ''; by = $acct.Short }); Save-State; return }
+    Log-Call 'juge' $acct 'opus' $res
     Set-Content -LiteralPath (Join-Path $RunDir 'juge-sortie.txt') "$($res.Out)" -Encoding utf8
     $j = Parse-ClaudeJson "$($res.Out)"
     if ($j -and $j.PSObject.Properties['ok']) {
@@ -2841,11 +3004,12 @@ function Mode-Review {
                     $(if ($jg3 -and $jg3.ok -eq $false) { @('', "$Warn⚠ Le juge n'est pas convaincu : $($jg3.summary)$R") } else { @() })) @('O', 'oui, livrer', 'P', 'presque : à ajuster', 'N', 'non : à refaire', 'Échap', 'pas encore')
                 Cls
                 $c5 = "$($k5.KeyChar)".ToLower()
-                if ($c5 -eq 'o') { Set-IntProp 'accepted' $true; Save-State }
+                if ($c5 -eq 'o') { Set-IntProp 'accepted' $true; Save-State; Write-Event 'validation' @{ choix = 'oui' } }
                 elseif ($c5 -in 'p', 'n') {
                     $fb = Read-Line '⚑ ÉQUIPE — guidé : ton retour' 'Qu''est-ce qui manque ou ne va pas ? Sois précis : l''équipe repartira de ça.'
                     Cls
                     if (-not $fb) { continue }
+                    Write-Event 'validation' @{ choix = $(if ($c5 -eq 'p') { 'presque' } else { 'non' }); retour = $fb }
                     Add-Content -LiteralPath (Join-Path $RunDir 'retours.md') "## $(Get-Date -Format 'dd/MM HH:mm') — $(if ($c5 -eq 'p') { 'à ajuster' } else { 'à refaire' })`n$fb`n" -Encoding utf8
                     if ($c5 -eq 'p') {
                         $global:FlowNextBase = $ib
@@ -2853,6 +3017,7 @@ function Mode-Review {
                     } else {
                         $global:FlowPrefill = "Reprends cette demande en tenant compte du retour de l'utilisateur sur un premier essai. Demande d'origine : $($State.prompt)`nRetour : $fb"
                     }
+                    [void](Update-Profile)
                     return 'home'
                 }
                 else { continue }
@@ -2885,7 +3050,10 @@ function Mode-Review {
             $res = Deliver-Run $dlv $target $cur
             if ($res.Ok) {
                 $State.status = 'merged'; $State.integration.delivered = $res.Info; Save-State
+                Write-Event 'livraison' @{ mode = $dlv; titre = (Final-Title); fusionnees = @($merged); laissees = @($skipped); verifications = @(@($State.integration.checks) | ForEach-Object { @{ nom = $_.name; ok = [bool]$_.ok } }); juge = $(if ($State.integration.judge) { $State.integration.judge.ok } else { $null }); guide = [bool]$State.guided }
+                Log-Quota 'fin'
                 [void](Message-Screen '⚑ ÉQUIPE — livré' (@("$Ok✓ $($res.Info)$R", '', "$B Où trouver le résultat :$R") + @($changed | Select-Object -First 6 | ForEach-Object { "   $Teal📄 $(Join-Path $RepoRoot $_)$R" }) + @('', "$Dm Copies de travail et branches temporaires supprimées ; l'historique reste dans $RunDir.$R") + @(Archive-Lines $res.Archive)) @('Entrée', 'nouvelle demande'))
+                [void](Update-Profile)
                 return 'home'
             }
             $msg = $res.Info
@@ -2893,7 +3061,7 @@ function Mode-Review {
         elseif ($ch -eq 'j') {
             $go = Confirm-Discard '⚑ ÉQUIPE — jeter le travail de l''équipe ?'
             Cls
-            if ($go) { $arch = @(Cleanup-Run -Abandon); $State.status = 'discarded'; Save-State; Show-Archive $arch; return 'home' }
+            if ($go) { Write-Event 'jete' @{ resume = $State.summary; juge = $(if ($State.integration.judge) { $State.integration.judge.ok } else { $null }) }; $arch = @(Cleanup-Run -Abandon); $State.status = 'discarded'; Save-State; Show-Archive $arch; [void](Update-Profile); return 'home' }
         }
     }
 }
@@ -2918,11 +3086,12 @@ try {
                 'run'       { Mode-Run }
                 'integrate' { Mode-Integrate }
                 'review'    { Mode-Review }
+                'memoire'   { Mode-Memory }
                 default     { 'quit' }
             }
             if ($mode -eq 'quit') {
                 $mode = if ($Nav.Count) { $b = $Nav[$Nav.Count - 1]; $Nav.RemoveAt($Nav.Count - 1); $b } elseif ($cur -eq 'setup') { 'setup' } else { 'home' }
-            } elseif ($mode -ne $cur -and $cur -in 'home', 'profile', 'project' -and $mode -in 'home', 'profile', 'project', 'plan', 'run', 'review', 'integrate') {
+            } elseif ($mode -ne $cur -and $cur -in 'home', 'profile', 'project' -and $mode -in 'home', 'profile', 'project', 'memoire', 'plan', 'run', 'review', 'integrate') {
                 if (-not $Nav.Count -or $Nav[$Nav.Count - 1] -ne $cur) { $Nav.Add($cur); if ($Nav.Count -gt 8) { $Nav.RemoveAt(0) } }
             }
         } catch {
