@@ -20,7 +20,7 @@ BeforeAll {
                 elseif ($l -is [System.Management.Automation.Language.AssignmentStatementAst]) { $l.Left.VariablePath.UserPath }
                 else { $l.Variable.VariablePath.UserPath }
                 if ($name -in $always) { "$([IO.Path]::GetFileName($Path)):$($l.Extent.StartLineNumber) $($fn.Name)() : `$$name masque la couleur" }
-                elseif ($name -in 'r', 'b') {
+                elseif ($name -cin 'r', 'b', 'l') {      # sensible à la casse : « $L » (la liste) est légitime, « $l » (une variable de boucle) l'écrase
                     $upper = $fn.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] -and $n.VariablePath.UserPath -ceq $name.ToUpper() }, $true)
                     if ($upper.Count) { "$([IO.Path]::GetFileName($Path)):$($l.Extent.StartLineNumber) $($fn.Name)() : `$$name masque `$$($name.ToUpper())" }
                 }
@@ -31,8 +31,14 @@ BeforeAll {
 
 Describe 'Pièges PowerShell' {
     It 'aucune fonction de FLOW.ps1, de flow-team.ps1 ni des modules qu''il charge ne masque une couleur d''affichage' {
-        $found = foreach ($f in 'FLOW.ps1', 'tools\flow-team.ps1', 'tools\flow-workflow.ps1', 'tools\flow-hooks.ps1', 'tools\flow-profile.ps1', 'tools\flow-deps.ps1') { Find-ShadowedColors (Join-Path $script:Root $f) }
+        $found = foreach ($f in 'FLOW.ps1', 'tools\flow-team.ps1', 'tools\flow-workflow.ps1', 'tools\flow-hooks.ps1', 'tools\flow-steps.ps1', 'tools\flow-profile.ps1', 'tools\flow-deps.ps1') { Find-ShadowedColors (Join-Path $script:Root $f) }
         @($found) | Should -BeNullOrEmpty
+    }
+
+    It 'le garde-fou voit bien une variable « $l » qui écrase la liste « $L » (défaut déjà rencontré dans flow-steps)' {
+        $tmp = Join-Path ([IO.Path]::GetTempPath()) ('gf-' + [guid]::NewGuid().ToString('N') + '.ps1')
+        Set-Content $tmp 'function Demo { $L = [Collections.Generic.List[string]]::new(); foreach ($l in @(1, 2)) { $L.Add("x") } }' -Encoding utf8
+        try { @(Find-ShadowedColors $tmp).Count | Should -Be 1 } finally { Remove-Item -LiteralPath $tmp -Force }
     }
 
     It 'tous les scripts se chargent sans erreur de syntaxe' {

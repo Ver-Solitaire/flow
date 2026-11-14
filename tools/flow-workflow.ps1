@@ -455,7 +455,7 @@ function Mode-Roadmap {
         $done = @($steps | Where-Object { $_.etat -eq 'fait' }).Count
         $bar = if ($steps.Count) { $n = [int][Math]::Round(20 * $done / $steps.Count); "$Ok$('█' * $n)$R$Dm$('░' * (20 - $n))$R" } else { '' }
         $L.Add("  $bar  $B$done$R sur $($steps.Count) étape(s) faites")
-        $L.Add($(if ($road.Errors.Count) { "  $Warn⚠ ROADMAP.md a $($road.Errors.Count) ligne(s) à corriger (E pour la modifier) : FLOW ne change rien tant que ce n'est pas réglé.$R" } else { (Now 'S change l''état de l''étape choisie · P sa passe · J lit le journal') }))
+        $L.Add($(if ($road.Errors.Count) { "  $Warn⚠ ROADMAP.md a $($road.Errors.Count) ligne(s) à corriger (E pour la modifier) : FLOW ne change rien tant que ce n'est pas réglé.$R" } else { (Now 'L = lancer l''étape choisie (conception, puis construction) · S change son état · P sa passe') }))
         $L.Add('')
         $teams = @(Open-Runs)
         $rows = @()
@@ -464,7 +464,7 @@ function Mode-Roadmap {
             $mark = if ($i -eq $sel) { "$(PalC 0.1)$B▸$R" } else { ' ' }
             $eq = @($teams | Where-Object { "$($_.step)" -ieq $st.id }).Count
             $rows += @{ Y = $L.Count; Row = $i }
-            $L.Add("  $mark $(Step-Icon $st.etat) $B$($st.id)$R  $(Fit $st.titre ($W - 44))  $Dm$($st.passe)$R  $($st.etat)$(if ($eq) { "  $Info⚑ $eq équipe(s)$R" })")
+            $L.Add("  $mark $(Step-Icon $st.etat) $B$($st.id)$R  $(Fit $st.titre ($W - 44))  $Dm$($st.passe)$R  $($st.etat)$(if (Spec-Validated $st.id) { "  $Dm spec ✓$R" })$(if ($eq) { "  $Info⚑ $eq équipe(s)$R" })")
         }
         if ($steps.Count) {
             $cur = $steps[$sel]
@@ -479,7 +479,7 @@ function Mode-Roadmap {
             foreach ($j in @(Get-Content -LiteralPath $jf -Encoding utf8 -Tail 5)) { $L.Add("    $Dm$(Fit $j ($W - 8))$R") }
         }
         $L.Add('')
-        $L.Add((Keys @('↑↓', 'choisir', 'S', 'état suivant', 'P', 'passe', 'E', 'modifier', 'J', 'lire le journal', 'Échap', 'retour')))
+        $L.Add((Keys @('↑↓', 'choisir', 'L', 'lancer l''étape', 'S', 'état', 'P', 'passe', 'E', 'modifier', 'J', 'journal', 'Échap', 'retour')))
         if ($msg) { $L.Add("  $msg") }
         Show-Frame $L
         foreach ($rw in $rows) { Add-Zone $rw.Y $rw.Y 0 999 @{ Row = $rw.Row } }
@@ -498,6 +498,11 @@ function Mode-Roadmap {
         elseif ($ch -eq 'p' -and $steps.Count) {
             $to = Next-In $WfPasses $steps[$sel].passe
             $msg = if (Set-StepPass $steps[$sel].id $to) { "$Ok✓ $($steps[$sel].id) : passe $to$R" } else { "$Err✗ ROADMAP.md est à corriger d'abord (E)$R" }
+        }
+        elseif (($ch -eq 'l' -or $k.Key -eq 'Enter') -and $steps.Count) {
+            $next = Invoke-StepLaunch $steps[$sel].id
+            Cls
+            if ($next -eq 'plan') { return 'plan' }
         }
         elseif ($ch -eq 'e') { Start-Process notepad.exe -ArgumentList "`"$(Wf-File 'ROADMAP.md')`"" -Wait; $msg = "$Ok✓ feuille de route relue$R"; Cls }
         elseif ($ch -eq 'j') {

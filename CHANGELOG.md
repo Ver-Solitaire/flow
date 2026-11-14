@@ -4,6 +4,16 @@
 
 **Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1.
 
+### Étapes de la feuille de route (livraison 4)
+- **L (ou Entrée) dans l'écran F9 lance une étape** : conception, puis construction. La passe de l'étape (légère ou complète) règle la profondeur.
+- **Passe de conception** (inspirée du workflow d'un gros projet) : le planificateur découpe la cartographie en 3 à 6 zones ; des lecteurs les explorent **en parallèle** (lecture seule, répartis sur tes comptes) ; une critique relève les manques et les contradictions ; la spec est écrite ; deux relectures (fidélité au cahier, faisabilité) la corrigent. En passe légère : un seul appel. Les vraies décisions te sont posées. Résultat : `.flow\workflow\etapes\<ÉTAPE>\spec.md` (§0 décisions de l'utilisateur qui font foi et choix par défaut « à confirmer », §1 ce qui existe, §2 lots aux fichiers disjoints, §3 tests, §4 vérifications en vrai, §5 risques) et `carte.md`.
+- **Rien n'est construit sans ta validation de la spec** (Entrée = valider et construire, E modifier, R refaire, Échap plus tard).
+- **Construction** : l'équipe habituelle, liée à l'étape : la spec est donnée au planificateur (ses lots deviennent les tâches), au brief des ouvriers et au juge ; la passe de l'étape est imposée au contrôle ; un point de retour Git est posé (`refs/flow-backup/<équipe>`).
+- **Données protégées** : leur empreinte (SHA-256) est prise au lancement de l'équipe et recontrôlée à l'intégration (vérification « données protégées (contenu) »), même si ces données ne sont pas dans Git.
+- **Enchaînement** : après une livraison qui termine l'étape, FLOW propose l'étape suivante, sauf si une vérification a échoué ou si le juge n'était pas convaincu.
+- **Correction d'un défaut des versions 1.3.0 et 1.4.0** : après une première demande envoyée, l'accueil sautait la liste des équipes et préremplissait la zone de demande avec du texte parasite, et « presque : ajuster » ne repartait pas du travail précédent (une apostrophe isolée à la place de `''`). Un test et un garde-fou l'empêchent.
+- Le garde-fou des variables étendu : une variable de boucle `$l` qui écrase la liste `$L` est maintenant détectée.
+
 ### Hooks de Claude Code (livraison 3)
 - **Hooks installés par FLOW** dans `.claude\settings.local.json` du projet et de chaque copie de travail des ouvriers (proposés à la validation du workflow, **H** dans le profil). L'installation **fusionne** : tes autres réglages et hooks ne sont jamais touchés, seules les entrées de FLOW sont ajoutées ou retirées.
 - **Protection réelle des chemins protégés** (`PreToolUse`) : l'écriture dans un chemin protégé du projet, ou une commande shell qui le modifie, est refusée **même en mode `bypassPermissions`** (vérifié avec un vrai Claude). Avant, ce n'était qu'une consigne.

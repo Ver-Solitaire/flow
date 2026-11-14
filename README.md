@@ -375,6 +375,16 @@ Pour un gros projet, FLOW crée avec toi une **méthode de travail écrite**, da
 
 Une fois validé, le cahier et l'étape en cours sont ajoutés aux consignes du planificateur, du guide, des ouvriers et des relecteurs. Les données à protéger et les interdits sont aussi inscrits dans `.flow\config.json` (`protectedPaths`, `guardrails`) : c'est là qu'ils sont lus. **Feuille de route vivante** (**F9** depuis l'écran de demande) : avancement des étapes, équipes en cours, journal. Chaque équipe est **rattachée à une étape** (proposée par le planificateur, **T** pour la changer dans le plan) : au lancement l'étape passe « en cours », une équipe jetée ou abandonnée la remet dans son état d'avant, et après une livraison FLOW demande si l'étape est terminée. Le journal (`.flow\workflow\journal.md`) garde une ligne datée par événement. Si `ROADMAP.md` contient une ligne illisible, FLOW ne réécrit rien tant que tu ne l'as pas corrigée (`ROADMAP.md.bak` garde la version précédente). La suite (passe de conception puis de construction par étape, enchaînement, hooks, tri des contradictions) est prévue par livraisons.
 
+### Lancer une étape : conception, puis construction (L dans F9)
+
+Dans l'écran de la feuille de route, **L** (ou Entrée) sur une étape :
+1. **Conception** (si l'étape n'a pas de spec validée) : des lecteurs cartographient le code par zones **en parallèle** (lecture seule, sur tes comptes), une critique relève les manques, la spec est écrite puis corrigée par deux relectures (fidélité au cahier, faisabilité). En passe *légère* : un seul appel. Les vraies décisions te sont posées. Tu valides la spec (**Entrée** valide et construit, **E** la modifie, **R** la refait avec ta remarque, **Échap** la garde en brouillon).
+2. **Construction** : l'équipe de FLOW (plan, ouvriers, relecture, intégration, juge), liée à l'étape. La spec fait foi : ses lots deviennent les tâches, elle est donnée au brief et au juge, et la passe de l'étape impose celle du contrôle. Un point de retour Git est posé (`refs/flow-backup/<équipe>`).
+3. **Données protégées** : leur empreinte SHA-256 est prise avant l'équipe et recontrôlée à l'intégration.
+4. **Enchaînement** : si la livraison termine l'étape et que tout est vert, FLOW propose la suivante.
+
+Les specs sont dans `.flow\workflow\etapes\<ÉTAPE>\` (`spec.md`, `carte.md`, les consignes et réponses de chaque appel dans `prompts\`).
+
 ### Hooks : le projet s'enrichit en travaillant (H dans le profil)
 
 FLOW branche des **hooks de Claude Code** dans le projet (`.claude\settings.local.json`, non commité) et dans la copie de travail de chaque ouvrier. Ils agissent dans **toutes** les sessions Claude de ce dossier, pas seulement dans FLOW. Proposés à la validation du workflow ; **H** dans le profil pour les voir, les activer ou les désactiver. Ils **fusionnent** avec tes réglages existants (tes autres hooks ne sont jamais touchés) et ne font jamais appel à Claude.

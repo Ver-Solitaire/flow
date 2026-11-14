@@ -140,6 +140,7 @@ $GitExe = Find-Git
 . (Join-Path $PSScriptRoot 'flow-deps.ps1')     # dépendances : une seule liste (dependances.json)
 . (Join-Path $PSScriptRoot 'flow-workflow.ps1') # workflow du projet : cahier, feuille de route (.flow\workflow\)
 . (Join-Path $PSScriptRoot 'flow-hooks.ps1')    # hooks de Claude Code dans le projet : installation, candidats
+. (Join-Path $PSScriptRoot 'flow-steps.ps1')    # étapes de la feuille de route : conception (spec), construction, enchaînement
 $global:FlowLogFile = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\config\flow.log'))
 $GitId = @()
 $GitCode = 0
@@ -520,6 +521,8 @@ function Use-Run($st) {
         }
     }
     if ($null -eq $st.step) { $st | Add-Member -NotePropertyName step -NotePropertyValue '' -Force }
+    if ($null -eq $st.specPath) { $st | Add-Member -NotePropertyName specPath -NotePropertyValue '' -Force }
+    if ($null -eq $st.depthFixed) { $st | Add-Member -NotePropertyName depthFixed -NotePropertyValue '' -Force }
     if ($null -eq $st.crossReview) { $st | Add-Member -NotePropertyName crossReview -NotePropertyValue (-not $NoReview) -Force }
     $script:State = $st
     $script:RunDir = Join-Path $RepoRoot ".flow\runs\$($st.id)"
@@ -565,6 +568,7 @@ function Planner-Prompt([string]$request, [string]$extra) {
     $more += (Profile-Block)
     $more += (Cahier-Block)
     $more += (Roadmap-Prompt-Block)
+    $more += (Spec-Block)
     if ("$($State.precisions)".Trim()) { $more += "`nRÉPONSES DE L'UTILISATEUR À TES QUESTIONS (elles font foi : respecte-les dans le brief et les tâches) :`n$($State.precisions)`n" }
     if ($State.guided) { $more += "`nMODE GUIDÉ : l'utilisateur veut décider des choix importants. Dans « questions » (0 à 5), liste les VRAIES décisions de conception encore ouvertes après ses réponses (même format que ci-dessous, la réponse recommandée en premier) ; dans le plan, prends l'option recommandée. Liste vide si tout est tranché.`n" }
     @"
@@ -629,7 +633,8 @@ $(if (Roadmap-Active) { '  "etape": "identifiant de l''étape de la feuille de r
 function Write-TaskFiles {
     New-Item -ItemType Directory -Force (Join-Path $RunDir 'taches'), (Join-Path $RunDir 'resultats') | Out-Null
     $prec = if ("$($State.precisions)".Trim()) { "`n## Précisions de l'utilisateur (elles font foi)`n$($State.precisions)`n" } else { '' }
-    $brief = "# Brief commun de l'équipe`n`n**Demande :** $($State.prompt)`n`n**Résumé :** $($State.summary)`n`n$($State.brief)`n$prec"
+    $specRef = if ("$($State.specPath)".Trim()) { "`n## Spécification de l'étape (fait foi : lis-la avant de commencer)`n$($State.specPath)`n" } else { '' }
+    $brief = "# Brief commun de l'équipe`n`n**Demande :** $($State.prompt)`n`n**Résumé :** $($State.summary)`n`n$($State.brief)`n$prec$specRef"
     Set-Content -LiteralPath (Join-Path $RunDir 'BRIEF.md') $brief -Encoding utf8
     foreach ($t in @($State.tasks)) {
         $others = @($State.tasks | Where-Object { $_.id -ne $t.id } | ForEach-Object { "- $($_.id) — $($_.title) (fichiers : $(@($_.files) -join ', '))" })
@@ -1336,11 +1341,13 @@ function Connect-Missing {
     $n
 }
 
-function Wait-Job-Spinner($job, [string]$label) {
-    # attend une tâche de fond en affichant un indicateur ; Échap l'annule (renvoie $null)
+function Wait-Job-Spinner($job, [string]$label, [double]$TimeoutMin = 20) {
+    # attend une tâche de fond en affichant un indicateur ; Échap l'annule (renvoie $null) ; au-delà de $TimeoutMin minutes elle est arrêtée (renvoie $null) :
+    # un Claude qui se bloque ne fige plus l'écran indéfiniment
     Cls
     $t0 = Get-Date
     while ($job.State -eq 'Running') {
+        if (((Get-Date) - $t0).TotalMinutes -ge $TimeoutMin) { Stop-Job $job -ErrorAction SilentlyContinue; Remove-Job $job -Force -ErrorAction SilentlyContinue; Write-FlowLog "tâche de fond arrêtée : délai de $TimeoutMin minutes dépassé ($label)" 'ERREUR'; return $null }
         $el = ((Get-Date) - $t0).ToString('mm\:ss')
         Show-Frame @('', "  $(Grad '⚑ ÉQUIPE' 0.1)", '', "  $(PalC ($script:Tick * 0.02))$($Spin[$script:Tick % 10])$R $label $Dm$el$R", '', (Keys @('Échap', 'annuler')))
         $script:Tick++
@@ -1454,6 +1461,7 @@ function Mode-Home {
         Cls
     }
     if (-not $global:FlowHooksSynced) { $global:FlowHooksSynced = $true; [void](Sync-Hooks) }
+    if ($global:FlowChain) { $chainId = $global:FlowChain; $global:FlowChain = ''; Cls; return (Invoke-StepLaunch $chainId) }   # étape suivante enchaînée après une livraison
     $runs = Open-Runs
     if ($runs.Count -and -not $global:FlowPrefill) {
         $i = 0
@@ -1497,8 +1505,8 @@ function Mode-Home {
     }
 
     $req = Read-Prompt $global:FlowPrefill
-    $global:FlowPrefill = '
-    $nextBase = $global:FlowNextBase; $global:FlowNextBase = '
+    $global:FlowPrefill = ''
+    $nextBase = $global:FlowNextBase; $global:FlowNextBase = ''
     if ($null -eq $req) { return 'quit' }
     if ($req -eq '::profile') { return 'profile' }
     if ($req -eq '::project') { return 'project' }
@@ -1506,6 +1514,13 @@ function Mode-Home {
     if ($req -eq '::memoire') { return 'memoire' }
     if ($req -eq '::roadmap') { return 'roadmap' }
 
+    return (Start-Run $req $nextBase)
+}
+
+function Start-Run {
+    # crée une équipe pour une demande et lance le planificateur : renvoie 'plan' (plan prêt) ou 'home'.
+    # $NextBase : branche de départ (ajustement) ; $StepId / $SpecPath : équipe liée à une étape de la feuille de route et à sa spécification
+    param([string]$req, [string]$nextBase = '', [string]$StepId = '', [string]$SpecPath = '', [string]$Depth = '')
     # point de départ : la branche cible du profil, sinon le dernier commit de la branche actuelle
     $baseRef = if ($Cfg.targetBranch) { [string]$Cfg.targetBranch } else { 'HEAD' }
     if ($nextBase) { [void](Git-In $RepoRoot @('rev-parse', '--verify', '-q', $nextBase)); if ($GitCode -eq 0) { $baseRef = $nextBase } }   # ajustement : on repart du travail précédent
@@ -1528,7 +1543,7 @@ function Mode-Home {
         base = (Git-In $RepoRoot @('rev-parse', $baseRef) | Select-Object -First 1).Trim()
         baseBranch = $(if ($Cfg.targetBranch) { [string]$Cfg.targetBranch } else { (Git-In $RepoRoot @('rev-parse', '--abbrev-ref', 'HEAD') | Select-Object -First 1).Trim() })
         prefix = [string]$Cfg.branchPrefix; deliver = [string]$Cfg.deliver; commitTitle = ''
-        summary = ''; brief = ''; planner = ''; depth = 'full'; guided = [bool]$global:FlowGuided; precisions = ''; step = ''; tasks = @(); crossReview = (-not $NoReview)
+        summary = ''; brief = ''; planner = ''; depth = 'full'; guided = [bool]$global:FlowGuided; precisions = ''; step = $StepId; specPath = ''; depthFixed = $Depth; tasks = @(); crossReview = (-not $NoReview)
         integration = [pscustomobject]@{ merged = @(); skipped = @(); conflict = ''; tests = $null; checks = @(); delivered = '' }
     }
     Use-Run $st
@@ -1537,7 +1552,15 @@ function Mode-Home {
     Save-State
     Write-Event 'demande' @{ texte = $req; guide = [bool]$State.guided; origine = $(if ($nextBase) { 'ajustement' } else { 'nouvelle' }) }
     Log-Quota 'debut'
-    if ($State.guided) { Invoke-Discovery }
+    if ($SpecPath -and (Test-Path -LiteralPath $SpecPath)) {
+        # la spécification de l'étape est donnée à toute l'équipe (dossier de l'équipe) ; elle fait foi, donc pas de nouvelles questions
+        Copy-Item -LiteralPath $SpecPath -Destination (Join-Path $RunDir 'SPEC.md') -Force
+        $State.specPath = Join-Path $RunDir 'SPEC.md'
+        Save-State
+    }
+    if ($StepId) { [void](Git-In $RepoRoot @('update-ref', "refs/flow-backup/$($State.id)", $State.base)) }   # point de retour : l'état d'avant l'étape
+    Write-DataManifest
+    if ($State.guided -and -not $State.specPath) { Invoke-Discovery }
     if (Invoke-Planner '') { return 'plan' }
     'home'
 }
@@ -1693,7 +1716,7 @@ function Apply-Plan($plan) {
     $State.brief = [string]$plan.brief
     $planStep = Valid-StepId "$($plan.etape)"
     if ($planStep) { $State | Add-Member -NotePropertyName step -NotePropertyValue $planStep -Force }
-    $State.depth = if ("$($plan.depth)".Trim().ToLower() -eq 'light') { 'light' } else { 'full' }
+    $State.depth = if ("$($State.depthFixed)" -in 'light', 'full') { "$($State.depthFixed)" } elseif ("$($plan.depth)".Trim().ToLower() -eq 'light') { 'light' } else { 'full' }   # la passe d'une étape de la feuille de route est imposée
     $State.tasks = $tasks
     try { [void](Topo $tasks) } catch { foreach ($t in $tasks) { $t.depends = @() } }
     Assign-Accounts $tasks
@@ -2537,6 +2560,7 @@ CRITÈRE DE RÉUSSITE (relis-le point par point, sans indulgence) :
 $($crit -join "`n")
 - les vérifications du projet passent (chiffres exacts dans $(Join-Path $RunDir 'verifications.txt') s'il existe) :
 $(if ($chk.Count) { $chk -join "`n" } else { '- (aucune vérification configurée : dis-le, ce n''est pas une preuve)' })
+- la spécification de l'étape, si elle existe ($(if ("$($State.specPath)".Trim()) { $State.specPath } else { 'aucune' })) : ses lots sont faits, ses tests et ses vérifications en vrai sont remplis
 - aucun défaut grave confirmé n'est resté ouvert (relectures et contre-vérifications dans $(Join-Path $RunDir 'relectures'))
 - les données réelles du projet sont intactes$(if (@($Cfg.protectedPaths).Count) { " ($(@($Cfg.protectedPaths) -join ', '))" })
 - la demande est satisfaite dans son ensemble
@@ -2670,7 +2694,7 @@ function Mode-Integrate {
         return 'integrate'
     }
     # vérifications du projet (lint, types, tests, build…) sur la branche d'intégration
-    if (-not @($State.integration.checks).Count) { $State.integration.checks = @(@(Run-Checks $iw) + @(Protected-Check $iw)) }
+    if (-not @($State.integration.checks).Count) { $State.integration.checks = @(@(Run-Checks $iw) + @(Protected-Check $iw) + @(Data-Check) | Where-Object { $_ }) }
     # mémoire du projet (scribe), puis jugement final (passe complète) : une seule fois par équipe
     if (-not $State.integration.scribe) { Invoke-Scribe $iw }
     if (-not $State.integration.judge -and (Judge-On)) { Invoke-Judge $iw }
@@ -3109,6 +3133,11 @@ function Mode-Review {
                 [void](Message-Screen '⚑ ÉQUIPE — livré' (@("$Ok✓ $($res.Info)$R", '', "$B Où trouver le résultat :$R") + @($changed | Select-Object -First 6 | ForEach-Object { "   $Teal📄 $(Join-Path $RepoRoot $_)$R" }) + @('', "$Dm Copies de travail et branches temporaires supprimées ; l'historique reste dans $RunDir.$R") + @(Archive-Lines $res.Archive)) @('Entrée', 'nouvelle demande'))
                 $stepRes = Ask-StepDone
                 if ($stepRes) { Write-Event 'etape_livraison' @{ etape = $stepNow; resultat = $stepRes } }
+                if ($stepRes -eq 'fait') {
+                    $clean = (@(@($State.integration.checks) | Where-Object { $_.ran -and -not $_.ok }).Count -eq 0) -and ($State.integration.judge.ok -ne $false)
+                    $nx = Offer-NextStep $clean
+                    if ($nx) { $global:FlowChain = $nx }
+                }
                 [void](Update-Profile)
                 return 'home'
             }
