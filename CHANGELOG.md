@@ -4,6 +4,13 @@
 
 **Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1.
 
+### Tri du projet (livraison 5) — F10
+- **Écran de tri (F10)** : FLOW examine la mémoire (`memoire\`), `CLAUDE.md`, le cahier, la feuille de route et les skills des comptes, et liste ce qui n'est pas sain : **références mortes** (fichier cité qui n'existe plus), **doublons** (identiques ou à 85 % des mots), **INDEX** incomplet ou avec liens morts, **fiches anciennes ou trop longues**, **cahier ≠ profil** (données protégées), **skills** en double, sans description, qui se chevauchent ou pas à jour, **conflits** notés par le scribe, candidats des hooks en retard.
+- **Contradictions (C)** : Claude compare les affirmations deux à deux et propose les paires incompatibles ; un numéro inventé est écarté.
+- **Rien n'est supprimé ni modifié sans ta validation** : chaque action archive d'abord le fichier dans `.flow\tri\archives\<date>\`, la modification d'un fichier de règles (`CLAUDE.md`, cahier) demande une confirmation de plus, « ignorer » n'est plus reproposé, tout est journalisé dans `.flow\tri\journal.md`. **M** traite en lot les doublons exacts (jamais `CLAUDE.md` ni le cahier).
+- **Proposé quand c'est utile** : à l'accueil, s'il y a un point grave ou après 8 équipes livrées depuis le dernier tri (une fois par session ; « plus tard » = 7 jours, « ne plus proposer »).
+- **Le scribe n'écrase plus une décision** : une information qui en contredit une est notée dans `memoire\conflits.md`, à trancher au prochain tri.
+
 ### Étapes de la feuille de route (livraison 4)
 - **L (ou Entrée) dans l'écran F9 lance une étape** : conception, puis construction. La passe de l'étape (légère ou complète) règle la profondeur.
 - **Passe de conception** (inspirée du workflow d'un gros projet) : le planificateur découpe la cartographie en 3 à 6 zones ; des lecteurs les explorent **en parallèle** (lecture seule, répartis sur tes comptes) ; une critique relève les manques et les contradictions ; la spec est écrite ; deux relectures (fidélité au cahier, faisabilité) la corrigent. En passe légère : un seul appel. Les vraies décisions te sont posées. Résultat : `.flow\workflow\etapes\<ÉTAPE>\spec.md` (§0 décisions de l'utilisateur qui font foi et choix par défaut « à confirmer », §1 ce qui existe, §2 lots aux fichiers disjoints, §3 tests, §4 vérifications en vrai, §5 risques) et `carte.md`.

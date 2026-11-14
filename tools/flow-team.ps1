@@ -141,6 +141,7 @@ $GitExe = Find-Git
 . (Join-Path $PSScriptRoot 'flow-workflow.ps1') # workflow du projet : cahier, feuille de route (.flow\workflow\)
 . (Join-Path $PSScriptRoot 'flow-hooks.ps1')    # hooks de Claude Code dans le projet : installation, candidats
 . (Join-Path $PSScriptRoot 'flow-steps.ps1')    # étapes de la feuille de route : conception (spec), construction, enchaînement
+. (Join-Path $PSScriptRoot 'flow-curation.ps1') # tri : références mortes, doublons, contradictions, skills
 $global:FlowLogFile = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\config\flow.log'))
 $GitId = @()
 $GitCode = 0
@@ -1248,7 +1249,7 @@ function Read-Prompt([string]$initial) {
         }
         $L.Add("  $bc╰$('─' * ($W - 5))╯$R")
         $L.Add("  $B$Teal▶ F5 ou Ctrl+D = ENVOYER la demande à l'équipe$R  $Dm(Entrée = nouvelle ligne)$R$(if ($lines.Count -and ($lines -join '').Trim()) { "  $Warn← pas encore envoyée$R" })")
-        $L.Add((Keys @('F5 / Ctrl+D', 'envoyer', 'Entrée', 'nouvelle ligne', 'F2', 'profil du projet', 'F3', 'changer de projet', 'F4', 'comptes', 'F6', 'plans en attente', 'F7', 'mode guidé', 'F8', 'mémoire', 'F9', 'feuille de route')))
+        $L.Add((Keys @('F5 / Ctrl+D', 'envoyer', 'Entrée', 'nouvelle ligne', 'F2', 'profil du projet', 'F3', 'changer de projet', 'F4', 'comptes', 'F6', 'plans en attente', 'F7', 'mode guidé', 'F8', 'mémoire', 'F9', 'feuille de route', 'F10', 'tri')))
         Show-Frame $L
         $k = (Read-KeyOrHint)
         $ctrl = [bool]($k.Modifiers -band [ConsoleModifiers]::Control)
@@ -1259,6 +1260,7 @@ function Read-Prompt([string]$initial) {
         if ($k.Key -eq 'F6') { return '::home' }
         if ($k.Key -eq 'F8') { return '::memoire' }
         if ($k.Key -eq 'F9') { return '::roadmap' }
+        if ($k.Key -eq 'F10') { return '::tri' }
         if ($k.Key -eq 'F7') { $global:FlowGuided = -not $global:FlowGuided; Save-GuidedPref $global:FlowGuided; continue }
         if ($k.Key -eq 'F5' -or ($ctrl -and $k.Key -eq 'D')) {
             $t = ($lines -join "`n").Trim()
@@ -1461,6 +1463,18 @@ function Mode-Home {
         Cls
     }
     if (-not $global:FlowHooksSynced) { $global:FlowHooksSynced = $true; [void](Sync-Hooks) }
+    if (-not $global:FlowTriOffered) {
+        $due = Tri-Offer-Due
+        $global:FlowTriOffered = $true
+        if ($due) {
+            $kt = Message-Screen '⚑ TRI — le projet mérite un coup d''œil' @("FLOW a repéré de quoi trier : $($due.Why).", '', "$Dm Références mortes, doublons, incohérences entre le cahier et le profil, skills en double, contradictions…$R", "$Ok Rien n'est modifié sans ta validation ; chaque fichier touché est d'abord copié dans .flow\tri\archives\.$R") @('Entrée', 'voir maintenant', 'S', 'plus tard (7 jours)', 'N', 'ne plus proposer')
+            $ct = "$($kt.KeyChar)".ToLower()
+            if ($kt.Key -eq 'Enter') { [void](Mode-Tri $due.Findings) }
+            elseif ($ct -eq 's') { $ts = Tri-State; $ts.snoozeUntil = (Get-Date).AddDays(7).ToString('o'); Save-TriState $ts }
+            elseif ($ct -eq 'n') { $ts = Tri-State; $ts.declined = $true; Save-TriState $ts }
+            Cls
+        }
+    }
     if ($global:FlowChain) { $chainId = $global:FlowChain; $global:FlowChain = ''; Cls; return (Invoke-StepLaunch $chainId) }   # étape suivante enchaînée après une livraison
     $runs = Open-Runs
     if ($runs.Count -and -not $global:FlowPrefill) {
@@ -1513,6 +1527,7 @@ function Mode-Home {
     if ($req -eq '::home') { return 'home' }
     if ($req -eq '::memoire') { return 'memoire' }
     if ($req -eq '::roadmap') { return 'roadmap' }
+    if ($req -eq '::tri') { return 'tri' }
 
     return (Start-Run $req $nextBase)
 }
@@ -2503,6 +2518,7 @@ s'il existe, $(Join-Path $RunDir 'verifications.txt'). Demande de l'utilisateur 
 3. pieges.md : ajoute chaque piège RENCONTRÉ (problème trouvé en relecture, erreur de test, annonce d'un coéquipier) sous la forme symptôme → cause → parade. N'invente rien.
 4. historique.md : ajoute UNE ligne datée en haut : « $(Get-Date -Format 'dd/MM/yyyy') — <titre du travail> (équipe $($State.id)) : <résumé en une phrase> ».
 5. Si une fiche thématique existe pour le sujet touché, mets-la à jour de la même façon (REMPLACER, pas ajouter en bas). Ne crée une nouvelle fiche (et sa ligne dans INDEX.md) que si un nouveau sujet le mérite.
+CONTRADICTIONS : avant d'écrire une information, compare-la à ce que disent déjà les fiches et le cahier (.flow\workflow\CAHIER.md). Si elle CONTREDIT une décision ou une règle existante, ne remplace RIEN : ajoute une puce dans memoire\conflits.md (créé si besoin, titre « # Conflits à trancher ») au format « - [jj/mm] ancien : … (fichier) | nouveau : … (source) » et laisse la fiche telle quelle ; l'utilisateur tranchera au prochain tri.
 Règles : factuel, court, en français ; cite le fichier source entre parenthèses ; si tu n'es pas sûr d'un fait, ne l'écris pas ; ne recopie aucun secret.
 $(Candidates-Block)$(Guardrails-Text)
 Réponds UNIQUEMENT avec un objet JSON : { "fiches": ["fichiers modifiés"], "resume": "une phrase" }
@@ -3129,6 +3145,7 @@ function Mode-Review {
                 $State.status = 'merged'; $State.integration.delivered = $res.Info; Save-State
                 Write-Event 'livraison' @{ mode = $dlv; titre = (Final-Title); fusionnees = @($merged); laissees = @($skipped); verifications = @(@($State.integration.checks) | ForEach-Object { @{ nom = $_.name; ok = [bool]$_.ok } }); juge = $(if ($State.integration.judge) { $State.integration.judge.ok } else { $null }); guide = [bool]$State.guided }
                 Log-Quota 'fin'
+                Tri-Note-Delivery
                 $stepNow = $State.step
                 [void](Message-Screen '⚑ ÉQUIPE — livré' (@("$Ok✓ $($res.Info)$R", '', "$B Où trouver le résultat :$R") + @($changed | Select-Object -First 6 | ForEach-Object { "   $Teal📄 $(Join-Path $RepoRoot $_)$R" }) + @('', "$Dm Copies de travail et branches temporaires supprimées ; l'historique reste dans $RunDir.$R") + @(Archive-Lines $res.Archive)) @('Entrée', 'nouvelle demande'))
                 $stepRes = Ask-StepDone
@@ -3173,11 +3190,12 @@ try {
                 'review'    { Mode-Review }
                 'memoire'   { Mode-Memory }
                 'roadmap'   { Mode-Roadmap }
+                'tri'       { Mode-Tri }
                 default     { 'quit' }
             }
             if ($mode -eq 'quit') {
                 $mode = if ($Nav.Count) { $b = $Nav[$Nav.Count - 1]; $Nav.RemoveAt($Nav.Count - 1); $b } elseif ($cur -eq 'setup') { 'setup' } else { 'home' }
-            } elseif ($mode -ne $cur -and $cur -in 'home', 'profile', 'project' -and $mode -in 'home', 'profile', 'project', 'memoire', 'roadmap', 'plan', 'run', 'review', 'integrate') {
+            } elseif ($mode -ne $cur -and $cur -in 'home', 'profile', 'project' -and $mode -in 'home', 'profile', 'project', 'memoire', 'roadmap', 'tri', 'plan', 'run', 'review', 'integrate') {
                 if (-not $Nav.Count -or $Nav[$Nav.Count - 1] -ne $cur) { $Nav.Add($cur); if ($Nav.Count -gt 8) { $Nav.RemoveAt(0) } }
             }
         } catch {

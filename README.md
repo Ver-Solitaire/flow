@@ -385,6 +385,9 @@ Dans l'écran de la feuille de route, **L** (ou Entrée) sur une étape :
 
 Les specs sont dans `.flow\workflow\etapes\<ÉTAPE>\` (`spec.md`, `carte.md`, les consignes et réponses de chaque appel dans `prompts\`).
 
+### Tri : garder le projet sain (F10)
+
+FLOW examine la mémoire, `CLAUDE.md`, le cahier, la feuille de route et les skills de tes comptes, et liste : références mortes, doublons, INDEX incomplet, fiches anciennes, incohérences cahier/profil, skills en double ou pas à jour, conflits notés par le scribe. **C** demande à Claude de chercher les contradictions. Rien n'est supprimé ni modifié sans ta validation : le fichier est d'abord archivé dans `.flow\tri\archives\`, les fichiers de règles demandent une confirmation de plus, **I** ignore définitivement un point. FLOW le propose à l'accueil quand un point est grave ou après 8 équipes livrées (« plus tard » = 7 jours).
 ### Hooks : le projet s'enrichit en travaillant (H dans le profil)
 
 FLOW branche des **hooks de Claude Code** dans le projet (`.claude\settings.local.json`, non commité) et dans la copie de travail de chaque ouvrier. Ils agissent dans **toutes** les sessions Claude de ce dossier, pas seulement dans FLOW. Proposés à la validation du workflow ; **H** dans le profil pour les voir, les activer ou les désactiver. Ils **fusionnent** avec tes réglages existants (tes autres hooks ne sont jamais touchés) et ne font jamais appel à Claude.
