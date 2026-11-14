@@ -1,5 +1,10 @@
 # Journal des changements
 
+## Non publié
+
+### Ajouté
+- **Mémoire de ta façon de travailler** (F8) : journal d'activité local (demandes, réponses guidées, changements de plan, retours, livraisons, usage et coût de chaque appel Claude, quota des comptes), copie des conversations des Claude avec secrets masqués, et **profil de travail** en langage naturel mis à jour à la fin de chaque équipe puis transmis aux Claude comme hypothèses. Tout reste sur le PC (`%LOCALAPPDATA%\FLOW\profil\`) ; chaque partie se coupe, et tout s'efface depuis l'écran.
+
 ## 1.3.0 — 14 novembre 2026
 
 ### Ajouté
