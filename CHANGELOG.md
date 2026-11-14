@@ -2,7 +2,15 @@
 
 ## Non publié
 
+## 1.5.0 — 14 novembre 2026
+
 **Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1.
+
+### Installateur
+- **FLOW-Setup-<version>.exe** (Inno Setup, installation par utilisateur, sans droits administrateur) : copie FLOW, puis lance `install.ps1` pour installer ce qui manque (winget) et créer le raccourci. Compilé par la CI. Pas encore essayé sur une machine vierge.
+
+### Correctifs des tests
+- `tests\run.ps1` n'écrase plus la variable `Cfg` quand la CI le lance par dot-sourcing ; `Wait-Jobs-Spinner` accepte un délai en minutes décimales.
 
 ### Banc de mesure de la qualité
 - `pwsh -File tools\flow-bench.ps1 -Live` : 3 petites tâches fixes (`bench\taches.json`) confiées à un vrai Claude dans une copie jetable ; FLOW compte les vérifications automatiques réussies, le coût et la durée, et ajoute une ligne à `bench\resultats.jsonl`. Sans `-Live` : résumé des dernières mesures, avec les régressions signalées (▼). Coûte quelques centimes par tâche ; jamais lancé par les tests.
