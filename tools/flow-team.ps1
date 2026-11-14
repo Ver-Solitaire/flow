@@ -861,7 +861,7 @@ function Read-Prompt([string]$initial) {
         }
         $L.Add("  $bc╰$('─' * ($W - 5))╯$R")
         $L.Add("  $B$Teal▶ F5 ou Ctrl+D = ENVOYER la demande à l'équipe$R  $Dm(Entrée = nouvelle ligne)$R$(if ($lines.Count -and ($lines -join '').Trim()) { "  $Warn← pas encore envoyée$R" })")
-        $L.Add((Keys @('F5 / Ctrl+D', 'envoyer', 'Entrée', 'nouvelle ligne', 'F2', 'profil du projet', 'F3', 'changer de projet', 'F4', 'comptes', 'F6', 'plans en attente', 'Échap', 'quitter')))
+        $L.Add((Keys @('F5 / Ctrl+D', 'envoyer', 'Entrée', 'nouvelle ligne', 'F2', 'profil du projet', 'F3', 'changer de projet', 'F4', 'comptes', 'F6', 'plans en attente')))
         Show-Frame $L
         $k = (Read-KeyOrHint)
         $ctrl = [bool]($k.Modifiers -band [ConsoleModifiers]::Control)
@@ -975,7 +975,7 @@ function Mode-Setup {
             $k = Message-Screen '⚑ ÉQUIPE — Git est nécessaire' @(
                 "Chaque ouvrier travaille dans sa propre copie du projet (git worktree) : il faut Git.",
                 '', "Installe-le, par exemple :  $B winget install --id Git.Git -e$R", '',
-                "$Dm puis appuie sur R pour vérifier à nouveau.$R") @('R', 'vérifier', 'Échap', 'quitter')
+                "$Dm puis appuie sur R pour vérifier à nouveau.$R") @('R', 'vérifier', 'Échap', 'retour')
             if ($k.Key -eq 'Escape') { return 'quit' }
             $script:GitExe = Find-Git; Init-GitId; continue
         }
@@ -987,7 +987,7 @@ function Mode-Setup {
             $k = Message-Screen '⚑ ÉQUIPE — ce dossier n''est pas sous Git' @(
                 "$B$target$R", "$Dm contenu : $($top -join '  ')$R", '',
                 'Les ouvriers ont besoin d''un dépôt Git (une copie de travail par tâche).',
-                "I = initialiser ici : git init + un premier commit de tout le dossier$(if ($heavy) { " (un .gitignore exclura : $($heavy -join ', '))" }).") @('I', 'initialiser', 'Échap', 'quitter')
+                "I = initialiser ici : git init + un premier commit de tout le dossier$(if ($heavy) { " (un .gitignore exclura : $($heavy -join ', '))" }).") @('I', 'initialiser', 'Échap', 'retour')
             if ($k.Key -eq 'Escape') { return 'quit' }
             if ("$($k.KeyChar)".ToLower() -ne 'i') { continue }
             [void](Git-In $target @('init'))
@@ -1001,7 +1001,7 @@ function Mode-Setup {
         }
         Exclude-Flow
         if (-not (Has-Commit)) {
-            $k = Message-Screen '⚑ ÉQUIPE — le dépôt n''a encore aucun commit' @('Les ouvriers partent du dernier commit : il en faut au moins un.', 'C = créer un premier commit avec le contenu actuel.') @('C', 'commit', 'Échap', 'quitter')
+            $k = Message-Screen '⚑ ÉQUIPE — le dépôt n''a encore aucun commit' @('Les ouvriers partent du dernier commit : il en faut au moins un.', 'C = créer un premier commit avec le contenu actuel.') @('C', 'commit', 'Échap', 'retour')
             if ($k.Key -eq 'Escape') { return 'quit' }
             if ("$($k.KeyChar)".ToLower() -eq 'c') { [void](Git-In $RepoRoot @('add', '-A')); [void](Git-In $RepoRoot @('commit', '-q', '-m', 'flow: commit initial')) }
             continue
@@ -1065,7 +1065,7 @@ function Mode-Home {
                 $mark = if ($k -eq $i) { "$(PalC 0.1)$B▸$R" } else { ' ' }
                 $L += "  $mark $B$($rv.summary)$R $Dm($($rv.id) · $($rv.status) · $(@($rv.tasks).Count) tâche(s))$R"
             }
-            $L += @('', (Keys @('↑↓', 'choisir', 'Entrée', 'reprendre', 'N', 'nouvelle demande', 'Échap', 'quitter')))
+            $L += @('', (Keys @('↑↓', 'choisir', 'Entrée', 'reprendre', 'N', 'nouvelle demande')))
             Show-Frame $L
             for ($q = 0; $q -lt $runs.Count; $q++) { Add-Zone (3 + $q) (3 + $q) 0 999 @{ Row = $q } }   # chaque équipe est cliquable
             $act = Read-Action -Wait
@@ -1334,7 +1334,7 @@ function Mode-Plan {
         $L.Add("  $Dm relecture croisée : $(if ($State.crossReview) { 'activée — chaque tâche finie est relue par un Claude d''un autre compte avant la fusion' } else { 'désactivée' }) · V pour changer$R")
         if ($autoAt) { $L.Add("  $Teal$B⏱ lancement automatique dans $([int][Math]::Max(0, [Math]::Ceiling(($autoAt - (Get-Date)).TotalSeconds))) s$R $Dm— appuie sur une touche pour garder la main et modifier le plan$R") }
         $L.Add('')
-        $L.Add((Keys @('Entrée', 'lancer l''équipe', 'Tab', 'compte', 'M', 'modèle', 'A', 'répartir', 'C', 'comptes', 'E', 'modifier le plan', 'R', 'replanifier', 'Échap', 'abandonner')))
+        $L.Add((Keys @('Entrée', 'lancer l''équipe', 'Tab', 'compte', 'M', 'modèle', 'A', 'répartir', 'C', 'comptes', 'E', 'modifier le plan', 'R', 'replanifier', 'X', 'abandonner', 'Échap', 'retour')))
         $L.Add("  $Dm clic : choisir une tâche · clic sur ◆ compte ou ◇ modèle : le changer$R")
         Show-Frame $L
         foreach ($pz in $planZones) {
@@ -1409,9 +1409,11 @@ function Mode-Plan {
             if ($null -ne $extra) { if (-not (Invoke-Planner $extra)) { return 'home' } }
             $sel = 0; Cls
         }
-        elseif ($k.Key -eq 'Escape') {
-            $State.status = 'discarded'; Save-State
-            return 'home'
+        elseif ($k.Key -eq 'Escape') { Save-State; return 'home' }    # retour : le plan reste en attente (accueil, Entrée pour le reprendre)
+        elseif ($ch -eq 'x') {
+            $k2 = Message-Screen '⚑ ÉQUIPE — abandonner ce plan ?' @('Le plan sera supprimé ; aucune copie de travail n''a encore été créée.') @('O', 'abandonner', 'Échap', 'garder')
+            Cls
+            if ("$($k2.KeyChar)".ToLower() -eq 'o') { $State.status = 'discarded'; Save-State; return 'home' }
         }
     }
 }
@@ -1828,7 +1830,7 @@ function Mode-Run {
         if ((Test-Path -LiteralPath (Review-File $t.id)) -and [int]$t.reviews) { $L.Add("    $Dm relecture(s) : $(Review-File $t.id)$R") }
         $L.Add("  $Dm relecture croisée : $(if ($State.crossReview) { "activée (au plus $MaxReviews par tâche)" } else { 'désactivée' }) · V pour changer · tableau partagé : TABLEAU.md$R")
         if ($Psmux) { $L.Add("  $Dm Les ouvriers sont dans la fenêtre « equipe » (Ctrl+B puis 2 ; Ctrl+B puis 1 pour revenir ici).$R") }
-        $L.Add((Keys @('↑↓', 'choisir', 'Entrée', 'voir l''ouvrier', 'M', 'lui écrire', 'C', 'appeler son conseiller', 'T', 'terminée', 'V', 'relecture', 'L', 'relancer', 'I', 'intégrer', 'X', 'abandonner')))
+        $L.Add((Keys @('↑↓', 'choisir', 'Entrée', 'voir l''ouvrier', 'M', 'lui écrire', 'C', 'appeler son conseiller', 'T', 'terminée', 'V', 'relecture', 'L', 'relancer', 'I', 'intégrer', 'X', 'abandonner', 'Échap', 'accueil')))
         if ($msg) { $L.Add("  $msg") }
         Show-Frame $L
         foreach ($rr in $runRows) { Add-Zone $rr.Y $rr.Y 0 999 @{ Row = $rr.Row } }   # chaque ouvrier est cliquable
@@ -1886,6 +1888,7 @@ function Mode-Run {
                 $State.status = 'integrating'; Save-State
                 return 'integrate'
             }
+            elseif ($k.Key -eq 'Escape') { Save-State; return 'home' }   # retour : les Claude continuent, Entrée sur l'équipe pour reprendre le suivi
             elseif ($ch -eq 'x') {
                 $go = Confirm-Discard '⚑ ÉQUIPE — abandonner l''équipe ?'
                 Cls
@@ -1963,7 +1966,7 @@ function Mode-Integrate {
                 "La tâche $B$cid$R ($($t.title)) entre en conflit avec le travail déjà fusionné :",
                 "$Warn$($unmerged -join '   ')$R", '',
                 'C = lancer un Claude intégrateur pour résoudre (il termine la fusion lui-même), puis Entrée ici.',
-                'A = laisser cette tâche de côté · Entrée = vérifier à nouveau') @('C', 'intégrateur', 'A', 'laisser de côté', 'Entrée', 'vérifier', 'Échap', 'plus tard')
+                'A = laisser cette tâche de côté · Entrée = vérifier à nouveau') @('C', 'intégrateur', 'A', 'laisser de côté', 'Entrée', 'vérifier', 'Échap', 'accueil')
             $ch = "$($k.KeyChar)".ToLower()
             if ($k.Key -eq 'Escape') { return 'quit' }
             if ($ch -eq 'c') {
@@ -1990,7 +1993,7 @@ function Mode-Integrate {
             $k = Message-Screen '⚑ ÉQUIPE — fusion non terminée' @(
                 "La tâche $B$cid$R ($($tc.title)) n'est $B$Err PAS$R dans la branche d'intégration : la fusion a été abandonnée ou refusée.",
                 $(if ($why) { "$Dm$why$R" } else { '' }), '',
-                'Entrée / R = réessayer la fusion · A = laisser cette tâche de côté (son travail est conservé)') @('R', 'réessayer', 'A', 'laisser de côté', 'Échap', 'plus tard')
+                'Entrée / R = réessayer la fusion · A = laisser cette tâche de côté (son travail est conservé)') @('R', 'réessayer', 'A', 'laisser de côté', 'Échap', 'accueil')
             if ($k.Key -eq 'Escape') { return 'quit' }
             if ("$($k.KeyChar)".ToLower() -eq 'a') { $skipped += $cid; $State.integration.skipped = $skipped }
             $State.integration.conflict = ''; Save-State
@@ -2448,9 +2451,13 @@ function Mode-Review {
 if ($LoadOnly) { return }   # tests : les fonctions sont chargées, l'écran n'est pas lancé
 $mode = 'setup'
 Enable-Mouse
+# Navigation : Échap ne ferme jamais la fenêtre. « quit » renvoyé par un écran = retour d'un niveau (accueil, profil, projet) ;
+# à la racine on reste à l'accueil. Seul un panneau fermé à la main (Ctrl+B x) arrête l'équipe.
+$Nav = [Collections.Generic.List[string]]::new()
 try {
-    while ($mode -ne 'quit') {
+    while ($true) {
         try {
+            $cur = $mode
             $mode = switch ($mode) {
                 'setup'     { Mode-Setup }
                 'profile'   { Mode-Profile }
@@ -2462,8 +2469,13 @@ try {
                 'review'    { Mode-Review }
                 default     { 'quit' }
             }
+            if ($mode -eq 'quit') {
+                $mode = if ($Nav.Count) { $b = $Nav[$Nav.Count - 1]; $Nav.RemoveAt($Nav.Count - 1); $b } elseif ($cur -eq 'setup') { 'setup' } else { 'home' }
+            } elseif ($mode -ne $cur -and $cur -in 'home', 'profile', 'project' -and $mode -in 'home', 'profile', 'project', 'plan', 'run', 'review', 'integrate') {
+                if (-not $Nav.Count -or $Nav[$Nav.Count - 1] -ne $cur) { $Nav.Add($cur); if ($Nav.Count -gt 8) { $Nav.RemoveAt(0) } }
+            }
         } catch {
-            $k = Message-Screen '⚑ ÉQUIPE — erreur' @("$Err$($_.Exception.Message)$R", "$Dm$($_.InvocationInfo.PositionMessage)$R") @('Entrée', 'revenir à l''accueil', 'Échap', 'quitter')
+            $k = Message-Screen '⚑ ÉQUIPE — erreur' @("$Err$($_.Exception.Message)$R", "$Dm$($_.InvocationInfo.PositionMessage)$R") @('Entrée', 'revenir à l''accueil', 'Échap', 'retour')
             $mode = if ($k.Key -eq 'Escape') { 'quit' } else { 'setup' }
         }
     }

@@ -1831,7 +1831,7 @@ $HelpLines = @(
     (HelpRow 'C' 'comptes Claude / connexion'     'R' 'recharger + synchroniser')
     (HelpRow 'P' 'publier (partager le profil)'   'B' 'bibliothèques partagées')
     (HelpRow 'O' 'dossier d''un profil partagé'   'D' 'sur un partagé : copie à toi')
-    (HelpRow 'J' 'changer de projet'              'Q / Échap' 'quitter')
+    (HelpRow 'J' 'changer de projet'              'Q' 'quitter')
     (Key '?' 'cette aide')
     ''
     "$Dm Dans une session :$R $(Key 'Ctrl+B D' 'ou') $(Key 'Ctrl+B F' 'revenir ici')"
@@ -2097,7 +2097,7 @@ function Show-Selector([string]$msg, [string]$selectId) {
                 elseif ($k.Key -eq 'End' -and $n) { $U.Sel = $n - 1 }
                 elseif ($k.Key -eq 'Enter' -and $n) { $go = & $launch $cur; if ($go) { return $go } }
                 elseif ($digit) { if ($digit -le $n) { $go = & $launch $U.View[$digit - 1]; if ($go) { return $go } } }
-                elseif ($k.Key -eq 'Escape') { if ($U.Filter) { $U.Filter = ''; Update-View $U $null } elseif ($U.Help) { $U.Help = $false } else { return $null } }
+                elseif ($k.Key -eq 'Escape') { if ($U.Filter) { $U.Filter = ''; Update-View $U $null } elseif ($U.Help) { $U.Help = $false } }   # Échap ne ferme jamais le sélecteur : Q pour quitter
                 elseif ($ch -eq 'q') { return $null }
                 elseif ($raw -eq '/') { $U.Searching = $true; $U.Help = $false; $U.Msg = '' }
                 elseif ($raw -eq '?') { $U.Help = -not $U.Help }

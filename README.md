@@ -68,7 +68,7 @@ pwsh -File FLOW.ps1 -InstallShortcut      # compile FLOW.exe et (re)crée les ra
 | O | profil partagé : changer son dossier de travail sur cette machine |
 | R | recharger les profils et synchroniser les bibliothèques Git |
 | ? | afficher toutes les touches |
-| Q / Échap | quitter |
+| Q | quitter (Échap ne ferme jamais rien : il efface la recherche ou l'aide) |
 
 Le sélecteur se place sur le dernier profil lancé (`config\state.json`).
 
