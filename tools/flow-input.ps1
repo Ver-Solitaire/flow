@@ -157,6 +157,7 @@ function Fake-Key([string]$name) {
         'F3'     { return [ConsoleKeyInfo]::new([char]0, [ConsoleKey]::F3, $false, $false, $false) }
         'F5'     { return [ConsoleKeyInfo]::new([char]0, [ConsoleKey]::F5, $false, $false, $false) }
         'Delete' { return [ConsoleKeyInfo]::new([char]0, [ConsoleKey]::Delete, $false, $false, $false) }
+        { $_ -match '^F(\d+)$' } { return [ConsoleKeyInfo]::new([char]0, [ConsoleKey]"F$([int]$name.Substring(1))", $false, $false, $false) }
         default {
             # lettre ou chiffre : le code de touche est le code ASCII de la majuscule (A = 65…)
             $ch = [char]$name.ToLower()[0]

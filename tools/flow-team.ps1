@@ -543,6 +543,8 @@ function Topo($tasks) {
 function Planner-Prompt([string]$request, [string]$extra) {
     $n = @(Usable-Accounts).Count
     $more = if ($extra) { "`nPRÉCISION DE L'UTILISATEUR SUR LE PLAN PRÉCÉDENT :`n$extra`n" } else { '' }
+    if ("$($State.precisions)".Trim()) { $more += "`nRÉPONSES DE L'UTILISATEUR À TES QUESTIONS (elles font foi : respecte-les dans le brief et les tâches) :`n$($State.precisions)`n" }
+    if ($State.guided) { $more += "`nMODE GUIDÉ : l'utilisateur veut décider des choix importants. Dans « questions » (0 à 5), liste les VRAIES décisions de conception encore ouvertes après ses réponses (même format que ci-dessous, la réponse recommandée en premier) ; dans le plan, prends l'option recommandée. Liste vide si tout est tranché.`n" }
     @"
 Tu es le PLANIFICATEUR d'une équipe de Claude qui vont travailler EN PARALLÈLE sur ce projet : $RepoRoot
 
@@ -591,6 +593,7 @@ $(Conventions-Text)
   "commitTitle": "titre du commit (ou de la pull request) final, dans le style de commit du projet",
   "brief": "brief commun, en Markdown",
   "depth": "light | full",
+$(if ($State.guided) { '  "questions": [ { "question": "décision à trancher", "why": "pourquoi elle compte", "options": ["recommandée", "autre"] } ],' })
   "tasks": [
     { "id": "A", "title": "titre court", "goal": "ce qu'il faut faire, précisément",
       "files": ["chemins relatifs des fichiers à créer ou modifier"], "depends": [], "done": "critères de fin vérifiables",
@@ -602,7 +605,8 @@ $(Conventions-Text)
 
 function Write-TaskFiles {
     New-Item -ItemType Directory -Force (Join-Path $RunDir 'taches'), (Join-Path $RunDir 'resultats') | Out-Null
-    $brief = "# Brief commun de l'équipe`n`n**Demande :** $($State.prompt)`n`n**Résumé :** $($State.summary)`n`n$($State.brief)`n"
+    $prec = if ("$($State.precisions)".Trim()) { "`n## Précisions de l'utilisateur (elles font foi)`n$($State.precisions)`n" } else { '' }
+    $brief = "# Brief commun de l'équipe`n`n**Demande :** $($State.prompt)`n`n**Résumé :** $($State.summary)`n`n$($State.brief)`n$prec"
     Set-Content -LiteralPath (Join-Path $RunDir 'BRIEF.md') $brief -Encoding utf8
     foreach ($t in @($State.tasks)) {
         $others = @($State.tasks | Where-Object { $_.id -ne $t.id } | ForEach-Object { "- $($_.id) — $($_.title) (fichiers : $(@($_.files) -join ', '))" })
@@ -631,6 +635,136 @@ function Conventions-Text {
     if ($Cfg.instructions) { $o += 'Règles du projet :'; $o += [string]$Cfg.instructions }
     if (-not $o.Count) { return '' }
     "`n## Workflow du projet (à respecter)`n" + ($o -join "`n") + "`n"
+}
+
+# ── mode GUIDÉ : FLOW pose des questions à chaque étape (avant le plan, au plan, pendant le travail, à la validation) ──
+$GuidedPrefFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'config\team-prefs.json'
+function Load-GuidedPref { try { if (Test-Path -LiteralPath $GuidedPrefFile) { return [bool]((Get-Content -LiteralPath $GuidedPrefFile -Raw -Encoding utf8 | ConvertFrom-Json).guided) } } catch {}; $false }
+function Save-GuidedPref([bool]$on) { try { Write-JsonAtomic ([ordered]@{ guided = $on }) $GuidedPrefFile } catch {} }
+$global:FlowGuided = Load-GuidedPref
+$global:FlowPrefill = ''     # texte proposé à la prochaine demande (ajustement après la validation)
+$global:FlowNextBase = ''    # branche de départ de la prochaine demande (le travail précédent, pour un ajustement)
+
+function Valid-Questions($raw) { @(@($raw) | Where-Object { $_ -and "$($_.question)".Trim() }) }
+
+function Questioner-Prompt([int]$round) {
+    $prev = if ("$($State.precisions)".Trim()) { "`nRÉPONSES DÉJÀ DONNÉES PAR L'UTILISATEUR :`n$($State.precisions)`n" } else { '' }
+    $howMany = if ($round -le 1) { 'entre 4 et 8 questions' } else { 'au plus 4 questions, SEULEMENT celles qui restent vraiment ouvertes après ses réponses (renvoie une liste vide s''il n''en reste aucune)' }
+    @"
+Tu es le GUIDE d'une équipe de Claude. Avant de découper le travail, tu aides l'utilisateur à préciser COMMENT parvenir au résultat
+qu'il veut, en lui posant des questions. Projet : $RepoRoot
+
+DEMANDE DE L'UTILISATEUR :
+<<<
+$($State.prompt)
+>>>
+$prev
+1. Explore le projet en lecture seule (Read, Grep, Glob), juste assez pour poser des questions PERTINENTES : ne demande jamais ce qui se lit dans le code, le README ou le CLAUDE.md.
+2. Pose $howMany sur la façon d'atteindre le résultat voulu : l'objectif réel et pour qui ; à quoi on reconnaîtra que c'est réussi ;
+   les contraintes (technologies, compatibilité, style, délais) ; les choix de conception importants et leurs conséquences ; le périmètre
+   (ce qui est inclus ET ce qui est exclu) ; les priorités ; comment vérifier (tests, démonstration) ; ce qu'il ne faut surtout pas casser.
+3. Chaque question est courte, concrète, en français simple, avec 2 à 4 réponses proposées : la plus recommandée EN PREMIER.
+   L'utilisateur pourra aussi répondre avec ses mots ou te laisser décider. Ajoute en une phrase pourquoi tu poses la question ("why").
+4. Si la demande est déjà assez précise, renvoie "questions": [].
+
+Réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ni après :
+{ "questions": [ { "question": "…", "why": "…", "options": ["réponse recommandée", "autre réponse", "…"] } ] }
+"@
+}
+
+function Ask-Questions($qs, [string]$title, [string]$intro = '') {
+    # une question à la fois (options numérotées, clic, T = répondre avec ses mots, S = laisser décider, ← revenir) ;
+    # renvoie la liste des réponses (@{ a ; mode ; idx }), ou $null si l'utilisateur passe (Échap)
+    $qs = @(Valid-Questions $qs)
+    if (-not $qs.Count) { return , @() }
+    $ans = @($null) * $qs.Count
+    $i = 0; $sel = 0
+    Cls
+    while ($i -lt $qs.Count) {
+        $qq = $qs[$i]
+        $opts = @(@($qq.options) | Where-Object { "$_".Trim() } | ForEach-Object { "$_".Trim() } | Select-Object -First 4)
+        if (-not $opts.Count) { $opts = @('Comme tu le recommandes') }
+        if ($sel -ge $opts.Count) { $sel = 0 }
+        $W = [Math]::Max(40, (ConW) - 1)
+        $L = [Collections.Generic.List[string]]::new()
+        $L.Add(''); $L.Add("  $(Grad $title 0.1)   $Dm question $($i + 1) sur $($qs.Count)$R")
+        if ($intro) { $L.Add("  $Dm$intro$R") }
+        $L.Add('')
+        foreach ($x in @(Chunks "$($qq.question)" ($W - 6))) { $L.Add("  $B$Teal$x$R") }
+        if ("$($qq.why)".Trim()) { foreach ($x in @(Chunks "Pourquoi cette question : $($qq.why)" ($W - 6))) { $L.Add("  $Dm$x$R") } }
+        $L.Add('')
+        $zones = @()
+        for ($j = 0; $j -lt $opts.Count; $j++) {
+            $mark = if ($j -eq $sel) { "$(PalC 0.1)$B▸$R" } else { ' ' }
+            $zones += @{ Y = $L.Count; Row = $j }
+            $L.Add("  $mark $B$($j + 1)$R  $($opts[$j])$(if ($j -eq 0) { "  $Ok(recommandé)$R" })")
+        }
+        $L.Add('')
+        if ($ans[$i]) { $L.Add("  $Dm réponse déjà donnée : $($ans[$i].a)$R") }
+        $L.Add("  $Dm T = répondre avec tes mots · S = je te fais confiance, décide à ma place$R")
+        $L.Add('')
+        $L.Add((Keys @('↑↓ ou 1-4', 'choisir', 'Entrée', 'valider', 'T', 'mes mots', 'S', 'décide', '←', 'précédente', 'Échap', 'passer')))
+        Show-Frame $L
+        foreach ($zn in $zones) { Add-Zone $zn.Y $zn.Y 0 999 @{ Row = $zn.Row } }
+        $act = Read-Action -Wait
+        if ($act.Click) { $sel = $act.Click.Row; if (-not $act.Double) { continue }; $k = Fake-Key 'Enter' } else { $k = $act.K }
+        if (-not $k) { continue }
+        $ch = "$($k.KeyChar)".ToLower()
+        if ($k.Key -eq 'Escape') { return $null }
+        elseif ($k.Key -eq 'UpArrow') { $sel = ($sel - 1 + $opts.Count) % $opts.Count }
+        elseif ($k.Key -eq 'DownArrow') { $sel = ($sel + 1) % $opts.Count }
+        elseif ($k.Key -eq 'LeftArrow') { if ($i -gt 0) { $i--; $sel = 0 } }
+        elseif ($ch -match '^[1-4]$' -and [int]$ch -le $opts.Count) { $sel = [int]$ch - 1 }
+        elseif ($k.Key -eq 'Enter') { $ans[$i] = @{ a = $opts[$sel]; mode = 'option'; idx = $sel }; $i++; $sel = 0 }
+        elseif ($ch -eq 't') {
+            $txt = Read-Line "$title — ta réponse" "$($qq.question)"
+            Cls
+            if ($txt) { $ans[$i] = @{ a = $txt; mode = 'libre'; idx = -1 }; $i++; $sel = 0 }
+        }
+        elseif ($ch -eq 's') { $ans[$i] = @{ a = $opts[0]; mode = 'délégué'; idx = 0 }; $i++; $sel = 0 }
+    }
+    , $ans
+}
+
+function Format-Answers($qs, $ans) {
+    $qs = @(Valid-Questions $qs)
+    $o = for ($i = 0; $i -lt $qs.Count; $i++) {
+        $an = $ans[$i]; if (-not $an) { continue }
+        $txt = switch ($an.mode) {
+            'libre'   { "$($an.a) (réponse libre de l'utilisateur)" }
+            'délégué' { "l'utilisateur te laisse décider ; option recommandée : $($an.a)" }
+            default   { "$($an.a)" }
+        }
+        "- **$("$($qs[$i].question)".Trim())** → $txt"
+    }
+    @($o) -join "`n"
+}
+
+function Add-Precisions([string]$block) {
+    # les réponses de l'utilisateur s'ajoutent à l'état de l'équipe (lues par le planificateur et mises dans le brief)
+    if (-not "$block".Trim()) { return }
+    $all = (@("$($State.precisions)".Trim(), $block.Trim()) | Where-Object { $_ }) -join "`n"
+    $State | Add-Member -NotePropertyName precisions -NotePropertyValue $all -Force
+    Set-Content -LiteralPath (Join-Path $RunDir 'precisions.md') "# Précisions de l'utilisateur`n`n$all`n" -Encoding utf8
+    Save-State
+}
+
+function Invoke-Discovery {
+    # avant le plan : le guide pose ses questions (jusqu'à 2 tours) ; Échap passe sans répondre
+    for ($round = 1; $round -le 2; $round++) {
+        $acct = Least-Loaded
+        $pf = Join-Path $RunDir "guide-$round.prompt.md"
+        Set-Content -LiteralPath $pf (Questioner-Prompt $round) -Encoding utf8
+        $job = Start-ClaudeJob $RepoRoot $acct $pf 'opus' 'Read,Grep,Glob'
+        $res = Wait-Job-Spinner $job "le guide (opus, $($acct.Label)) étudie le projet et prépare ses questions…"
+        if ($null -eq $res) { return }
+        $j = Parse-ClaudeJson "$($res.Out)"
+        $qs = @(Valid-Questions $j.questions)
+        if (-not $qs.Count) { break }
+        $ans = Ask-Questions $qs '⚑ ÉQUIPE — guidé : précisons le résultat' $(if ($round -gt 1) { 'Quelques précisions encore, d''après tes réponses.' } else { 'Réponds à ton rythme : tu pourras toujours décider plus tard.' })
+        if ($null -eq $ans) { break }
+        Add-Precisions (Format-Answers $qs $ans)
+    }
 }
 
 # ── qualité : passe légère / complète, garde-fous, contre-vérification, juge, scribe ──
@@ -705,6 +839,11 @@ function Worker-Prompt($t) {
         "  c'est sa mise à jour qui signale que tu as fini."
     ) -join "`n" } else { '' }
     $conv = Conventions-Text
+    $autoText = if ($State.guided) {
+        "- MODE GUIDÉ : l'utilisateur veut décider des choix importants. Avant tout choix qui change le résultat (structure, nom public, format, bibliothèque, comportement visible, contenu éditorial), pose-lui la question ICI, dans ce panneau, avec 2 ou 3 options et ta recommandation, puis ATTENDS sa réponse avant de continuer. Les détails mineurs : décide seul. Note chaque réponse en une ligne dans ton compte-rendu."
+    } else {
+        "- Autonomie : décide, avance et note tes décisions (annonce si elles touchent les autres). Ne sollicite l'utilisateur qu'en dernier`n  recours, quand une information indispensable n'existe nulle part (ni dans le brief, ni dans le code, ni chez un coéquipier)."
+    }
     $commitHint = if ($Cfg.commitStyle -eq 'conventional') { 'un message Conventional Commits (ex. « feat: … »)' } else { 'un message dans le style de l''historique du projet' }
     @"
 # Tu es l'ouvrier de la tâche $($t.id) — $($t.title)
@@ -739,8 +878,7 @@ Tu travailles dans TA copie du dépôt : $wt (branche $br). Les autres travaille
   @ suivi de la lettre de sa tâche (ex. « @B : ta fonction doit renvoyer une liste, pas un tuple »). Elle lui est transmise tout de suite,
   à lui seul. Sans @, elle va à tous. Si un coéquipier te pose une question ([FLOW] Message de X), réponds-lui par une ligne « @X : … »
   avant de continuer.
-- Autonomie : décide, avance et note tes décisions (annonce si elles touchent les autres). Ne sollicite l'utilisateur qu'en dernier
-  recours, quand une information indispensable n'existe nulle part (ni dans le brief, ni dans le code, ni chez un coéquipier).
+$autoText
 $rev
 
 ## Si la tâche devient trop complexe
@@ -917,6 +1055,7 @@ function Read-Prompt([string]$initial) {
         $wait = @(Open-Runs).Count
         if ($wait) { $L.Add("  $Teal⚑ $wait équipe(s) ou plan(s) en attente — F6 pour les voir$R") }
         $chk = (@($Cfg.checks) | ForEach-Object { $_.name }) -join ', '
+        $L.Add("  $(if ($global:FlowGuided) { "$B$Teal✦ Mode guidé : activé$R $Dm— FLOW te posera des questions avant le plan, au plan, pendant le travail et à la validation · F7 pour le désactiver$R" } else { "$Dm Mode guidé : désactivé — F7 pour que FLOW te pose des questions à chaque étape$R" })")
         $L.Add("  $Dm workflow : $(if ($Cfg.setup) { "préparation « $($Cfg.setup) » · " })vérifs : $(if ($chk) { $chk } else { 'aucune' }) · livraison : $($Cfg.deliver)$R")
         $L.Add('')
         $L.Add("  $Dm Décris ce que tu veux : un planificateur va découper la demande en tâches, réparties$R")
@@ -934,7 +1073,7 @@ function Read-Prompt([string]$initial) {
         }
         $L.Add("  $bc╰$('─' * ($W - 5))╯$R")
         $L.Add("  $B$Teal▶ F5 ou Ctrl+D = ENVOYER la demande à l'équipe$R  $Dm(Entrée = nouvelle ligne)$R$(if ($lines.Count -and ($lines -join '').Trim()) { "  $Warn← pas encore envoyée$R" })")
-        $L.Add((Keys @('F5 / Ctrl+D', 'envoyer', 'Entrée', 'nouvelle ligne', 'F2', 'profil du projet', 'F3', 'changer de projet', 'F4', 'comptes', 'F6', 'plans en attente')))
+        $L.Add((Keys @('F5 / Ctrl+D', 'envoyer', 'Entrée', 'nouvelle ligne', 'F2', 'profil du projet', 'F3', 'changer de projet', 'F4', 'comptes', 'F6', 'plans en attente', 'F7', 'mode guidé')))
         Show-Frame $L
         $k = (Read-KeyOrHint)
         $ctrl = [bool]($k.Modifiers -band [ConsoleModifiers]::Control)
@@ -943,6 +1082,7 @@ function Read-Prompt([string]$initial) {
         if ($k.Key -eq 'F3') { return '::project' }
         if ($k.Key -eq 'F4') { [void](Connect-Missing); continue }
         if ($k.Key -eq 'F6') { return '::home' }
+        if ($k.Key -eq 'F7') { $global:FlowGuided = -not $global:FlowGuided; Save-GuidedPref $global:FlowGuided; continue }
         if ($k.Key -eq 'F5' -or ($ctrl -and $k.Key -eq 'D')) {
             $t = ($lines -join "`n").Trim()
             if ($t) { return $t } else { continue }
@@ -1128,7 +1268,7 @@ function Mode-Project {
 
 function Mode-Home {
     $runs = Open-Runs
-    if ($runs.Count) {
+    if ($runs.Count -and -not $global:FlowPrefill) {
         $i = 0
         Cls
         while ($true) {
@@ -1169,7 +1309,9 @@ function Mode-Home {
         }
     }
 
-    $req = Read-Prompt ''
+    $req = Read-Prompt $global:FlowPrefill
+    $global:FlowPrefill = '
+    $nextBase = $global:FlowNextBase; $global:FlowNextBase = '
     if ($null -eq $req) { return 'quit' }
     if ($req -eq '::profile') { return 'profile' }
     if ($req -eq '::project') { return 'project' }
@@ -1177,6 +1319,7 @@ function Mode-Home {
 
     # point de départ : la branche cible du profil, sinon le dernier commit de la branche actuelle
     $baseRef = if ($Cfg.targetBranch) { [string]$Cfg.targetBranch } else { 'HEAD' }
+    if ($nextBase) { [void](Git-In $RepoRoot @('rev-parse', '--verify', '-q', $nextBase)); if ($GitCode -eq 0) { $baseRef = $nextBase } }   # ajustement : on repart du travail précédent
     [void](Git-In $RepoRoot @('rev-parse', '--verify', '-q', $baseRef))
     if ($GitCode -ne 0) { [void](Message-Screen '⚑ ÉQUIPE' @("$Err branche cible introuvable : $baseRef (profil du projet, F2)$R") @('Entrée', 'retour')); return 'home' }
     $dirty = if ($baseRef -eq 'HEAD') { Dirty-Files } else { @() }
@@ -1196,33 +1339,25 @@ function Mode-Home {
         base = (Git-In $RepoRoot @('rev-parse', $baseRef) | Select-Object -First 1).Trim()
         baseBranch = $(if ($Cfg.targetBranch) { [string]$Cfg.targetBranch } else { (Git-In $RepoRoot @('rev-parse', '--abbrev-ref', 'HEAD') | Select-Object -First 1).Trim() })
         prefix = [string]$Cfg.branchPrefix; deliver = [string]$Cfg.deliver; commitTitle = ''
-        summary = ''; brief = ''; planner = ''; depth = 'full'; tasks = @(); crossReview = (-not $NoReview)
+        summary = ''; brief = ''; planner = ''; depth = 'full'; guided = [bool]$global:FlowGuided; precisions = ''; tasks = @(); crossReview = (-not $NoReview)
         integration = [pscustomobject]@{ merged = @(); skipped = @(); conflict = ''; tests = $null; checks = @(); delivered = '' }
     }
     Use-Run $st
     New-Item -ItemType Directory -Force $RunDir | Out-Null
     Set-Content -LiteralPath (Join-Path $RunDir 'demande.md') $req -Encoding utf8
     Save-State
+    if ($State.guided) { Invoke-Discovery }
     if (Invoke-Planner '') { return 'plan' }
     'home'
 }
 
-function Invoke-Planner([string]$extra) {
+function Invoke-Planner([string]$extra, [switch]$NoQuestions) {
     # planificateur : Claude en mode non interactif, lecture seule, sur le compte le moins chargé
     $acct = Least-Loaded
     $State.planner = $acct.Id
     $pf = Join-Path $RunDir 'planificateur.md'
     Set-Content -LiteralPath $pf (Planner-Prompt $State.prompt $extra) -Encoding utf8
-    $msg = "Lis le fichier $pf et suis exactement ses instructions. Ta réponse finale doit être uniquement l'objet JSON demandé."
-    $job = Start-Job -ScriptBlock {
-        param($cwd, $dir, $msg, $runDir)
-        Set-Location -LiteralPath $cwd
-        [Console]::OutputEncoding = [Text.Encoding]::UTF8   # la sortie de claude est en UTF-8
-        if ($dir) { $env:CLAUDE_CONFIG_DIR = $dir } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
-        # le découpage conditionne tout le reste : modèle le plus capable
-        $out = & claude -p $msg --model opus --output-format json --allowedTools 'Read,Grep,Glob' --add-dir $runDir 2>&1 | Out-String
-        [pscustomobject]@{ Code = $LASTEXITCODE; Out = $out }
-    } -ArgumentList $RepoRoot, $acct.Dir, $msg, $RunDir
+    $job = Start-ClaudeJob $RepoRoot $acct $pf 'opus' 'Read,Grep,Glob'
     $res = Wait-Job-Spinner $job "le planificateur (opus, $($acct.Label)) étudie le projet, découpe la demande et choisit les modèles…"
     if ($null -eq $res) { return $false }
     Set-Content -LiteralPath (Join-Path $RunDir 'planificateur-sortie.txt') $res.Out -Encoding utf8
@@ -1242,6 +1377,21 @@ function Invoke-Planner([string]$extra) {
         return $false
     }
     Apply-Plan $plan
+    if ($State.guided -and -not $NoQuestions) {
+        $pq = @(Valid-Questions $plan.questions | Select-Object -First 5)
+        if ($pq.Count) {
+            $ans = Ask-Questions $pq '⚑ ÉQUIPE — guidé : décisions du plan' 'Le plan est prêt ; ces choix restent à trancher.'
+            if ($null -ne $ans) {
+                $block = Format-Answers $pq $ans
+                Add-Precisions $block
+                $State.brief = "$($State.brief)`n`n## Décisions de l'utilisateur (après le plan)`n$block"
+                Save-State
+                $moved = @($ans | Where-Object { $_ -and ($_.mode -eq 'libre' -or ($_.mode -eq 'option' -and $_.idx -gt 0)) })
+                # une décision différente de la recommandation : le plan est refait en la respectant (une seule fois)
+                if ($moved.Count) { return (Invoke-Planner "L'utilisateur a tranché les décisions ouvertes (respecte-les) :`n$block" -NoQuestions) }
+            }
+        }
+    }
     $true
 }
 
@@ -1371,7 +1521,7 @@ function Mode-Plan {
     $sel = 0
     # lancement automatique (-AutoStart) : seulement pour un plan sans risque (aucun fichier partagé, tous les comptes utilisés sont connectés)
     $autoAt = $null
-    if ($AutoStart -gt 0 -and -not @(Plan-Warnings).Count -and -not @(Missing-Accounts | Where-Object { $_.Id -in @($State.tasks.account) }).Count) { $autoAt = (Get-Date).AddSeconds($AutoStart) }
+    if ($AutoStart -gt 0 -and -not $State.guided -and -not @(Plan-Warnings).Count -and -not @(Missing-Accounts | Where-Object { $_.Id -in @($State.tasks.account) }).Count) { $autoAt = (Get-Date).AddSeconds($AutoStart) }
     Cls
     while ($true) {
         $W = [Math]::Max(40, (ConW) - 1)
@@ -2684,6 +2834,29 @@ function Mode-Review {
             }
             # 2) rien à livrer ?
             if (-not $merged.Count) { $msg = "$Err✗ aucune tâche n'a été fusionnée : il n'y a rien à livrer (Échap pour revenir, J pour jeter)$R"; continue }
+            # 2 bis) mode guidé : le résultat correspond-il à ce que l'utilisateur voulait ?
+            if ($State.guided -and -not $State.integration.accepted) {
+                $jg3 = $State.integration.judge
+                $k5 = Message-Screen '⚑ ÉQUIPE — guidé : c''est bien ce que tu voulais ?' (@("Ta demande : $($State.prompt)", '', 'Regarde le résultat avant de livrer (V pour le lire).') +
+                    $(if ($jg3 -and $jg3.ok -eq $false) { @('', "$Warn⚠ Le juge n'est pas convaincu : $($jg3.summary)$R") } else { @() })) @('O', 'oui, livrer', 'P', 'presque : à ajuster', 'N', 'non : à refaire', 'Échap', 'pas encore')
+                Cls
+                $c5 = "$($k5.KeyChar)".ToLower()
+                if ($c5 -eq 'o') { Set-IntProp 'accepted' $true; Save-State }
+                elseif ($c5 -in 'p', 'n') {
+                    $fb = Read-Line '⚑ ÉQUIPE — guidé : ton retour' 'Qu''est-ce qui manque ou ne va pas ? Sois précis : l''équipe repartira de ça.'
+                    Cls
+                    if (-not $fb) { continue }
+                    Add-Content -LiteralPath (Join-Path $RunDir 'retours.md') "## $(Get-Date -Format 'dd/MM HH:mm') — $(if ($c5 -eq 'p') { 'à ajuster' } else { 'à refaire' })`n$fb`n" -Encoding utf8
+                    if ($c5 -eq 'p') {
+                        $global:FlowNextBase = $ib
+                        $global:FlowPrefill = "Ajuste le travail de l'équipe précédente (il est déjà dans ta copie : pars de lui, ne le refais pas). Demande d'origine : $($State.prompt)`nRetour de l'utilisateur : $fb"
+                    } else {
+                        $global:FlowPrefill = "Reprends cette demande en tenant compte du retour de l'utilisateur sur un premier essai. Demande d'origine : $($State.prompt)`nRetour : $fb"
+                    }
+                    return 'home'
+                }
+                else { continue }
+            }
             # 3) tâches qui ne seront PAS livrées : on le dit avant, et leur travail est mis à l'abri
             $left = @($State.tasks | Where-Object { $_.id -notin $merged })
             if ($left.Count) {

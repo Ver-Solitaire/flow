@@ -322,6 +322,17 @@ Une équipe interrompue se reprend au prochain lancement.
 - **Mémoire du projet** : **G** dans l'écran du profil crée `CLAUDE.md` et le dossier `memoire\` (`INDEX.md`, état actuel, décisions, pièges, historique) ; à commiter. À la fin de chaque équipe, un **scribe** met ces fiches à jour (il remplace l'ancien état, ajoute les pièges rencontrés et une ligne d'historique) et son commit part avec la livraison. Il ne touche à rien d'autre que `memoire\`.
 - Interrupteurs dans `.flow\config.json` : `"verify": false`, `"judge": false`, `"scribe": false`.
 
+### Mode guidé (F7 sur l'écran de demande)
+
+Pour obtenir exactement le résultat voulu, **FLOW te pose des questions à chaque étape** au lieu de décider seul. Le réglage est retenu d'un lancement à l'autre (`config\team-prefs.json`, jamais commité).
+
+1. **Avant le plan** : un *guide* (Claude, lecture seule) étudie ton projet et ta demande, puis te pose 4 à 8 questions sur **comment** y arriver : objectif et public, à quoi on reconnaît que c'est réussi, contraintes, choix de conception et leurs conséquences, périmètre, priorités, façon de vérifier. Un second tour (4 questions au plus) ne porte que sur ce qui reste ouvert. Il ne demande jamais ce qui se lit dans le code ou le CLAUDE.md.
+2. **Au plan** : le planificateur te soumet les vraies décisions de conception encore ouvertes. Si tu t'écartes de sa recommandation, **le plan est refait** en la respectant (une seule fois).
+3. **Pendant le travail** : chaque ouvrier **te pose la question** dans son panneau avant un choix qui change le résultat (structure, nom public, format, comportement visible, contenu), avec 2 ou 3 options et sa recommandation, puis attend ta réponse. Le tableau de bord affiche « ✋ attend ta réponse ». Les détails mineurs, il les décide seul.
+4. **À la validation** : en appuyant sur **F**, FLOW demande « c'est bien ce que tu voulais ? » : **oui** (livrer), **presque** (une nouvelle équipe repart de ce travail avec ton retour) ou **non** (on refait avec ton retour). Ton retour est gardé dans `retours.md`.
+
+Pour chaque question : **↑↓ ou 1-4** pour choisir (ou clic), **Entrée** pour valider, **T** pour répondre avec tes mots, **S** pour dire « décide à ma place » (la recommandation est prise), **←** pour revenir à la question précédente, **Échap** pour passer les questions. Tes réponses sont dans `precisions.md` de l'équipe et dans son brief : tous les Claude les voient. Le lancement automatique du plan est désactivé en mode guidé.
+
 Prérequis : **Git**, et un projet sous Git (sinon la fenêtre propose `git init` + premier commit).
 
 ### Sur n'importe quel projet
