@@ -89,11 +89,20 @@ function Stepper([int]$n) {
 }
 function Now([string]$t) { "  $B$Warn▶ À toi :$R $t" }
 $LastFrameSize = ''
+function Fit-Height($lines, [int]$H) {
+    $room = $H - 1; $all = @($lines)
+    if ($all.Count -le $room -or $room -lt 8) { return $all }
+    $keep = 2
+    @($all | Select-Object -First ($room - $keep - 1)) + @("  $Dm… (écran trop haut : agrandis la fenêtre pour tout voir)$R") + @($all | Select-Object -Last $keep)
+}
 function Show-Frame($lines) {
     $W = [Math]::Max(40, (ConW) - 1); $H = [Math]::Max(6, (ConH))
     # fenêtre redimensionnée : tout effacer, sinon des morceaux de l'ancienne image restent à l'écran
     $sz = "$(ConW)x$(ConH)"
     if ($sz -ne $script:LastFrameSize) { [Console]::Write("$e[2J"); $script:LastFrameSize = $sz }
+    # écran plus haut que la fenêtre : on garde le HAUT (titre, bannière) et les DEUX DERNIÈRES lignes (touches, message) ; le milieu est coupé.
+    # Avant, les touches et les messages du bas disparaissaient et l'utilisateur croyait que « rien ne se passait ».
+    $lines = Fit-Height $lines $H
     $script:AttnRow = -1
     for ($ai = 0; $ai -lt $lines.Count; $ai++) { if ("$($lines[$ai])" -like "*$script:AttnMark*") { $script:AttnRow = $ai; break } }
     $sb = [Text.StringBuilder]::new(); [void]$sb.Append("$e[H")
@@ -2883,6 +2892,10 @@ function Deliver-Run([string]$dlv, [string]$target, [string]$cur) {
     switch ($dlv) {
         { $_ -in 'merge', 'squash' } {
             if ($cur -ne $target) { return @{ Ok = $false; Info = "$Err✗ ton dossier est sur « $cur » et la cible est « $target » : bascule sur $target (git switch $target), puis F$R" } }
+            # la comptabilité de FLOW lui-même (feuille de route, journal, profil) change pendant le travail : on la commite d'abord,
+            # sinon Git refuse de fusionner (« vos modifications locales seraient écrasées »)
+            $fl = @(Git-In $RepoRoot @('status', '--porcelain', '--', '.flow/workflow', '.flow/config.json') | Where-Object { $_ -and $_ -notmatch '^\?\?' })
+            if ($fl.Count) { [void](Git-In $RepoRoot @('add', '--', '.flow/workflow', '.flow/config.json')); [void](Git-In $RepoRoot @('commit', '-q', '-m', 'flow: état du workflow', '--', '.flow/workflow', '.flow/config.json')) }
             $dirty = Dirty-Files -TrackedOnly
             if ($dirty.Count) { return @{ Ok = $false; Info = "$Err✗ ton dossier a $($dirty.Count) modification(s) non commitée(s) : commit-les ou mets-les de côté (git stash), puis F$R" } }
             if ($dlv -eq 'merge') {

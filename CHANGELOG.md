@@ -12,6 +12,8 @@
 
 ### Audit d'un projet neuf (budget-cli)
 - **Ouvriers bloqués sur « Do you trust this folder ? »** : sur un projet neuf, Claude Code pose cette question dans chaque nouvelle copie de travail et les ouvriers attendaient indéfiniment (35 minutes constatées). FLOW répond maintenant lui-même « Yes, I trust this folder », uniquement pour la copie qu'il vient de créer pour l'équipe (le texte de l'écran doit nommer cette copie).
+- **Les touches et messages du bas ne disparaissent plus** quand l'écran est plus haut que la fenêtre (c'est ce qui donnait l'impression que « rien ne se passe » après un Entrée) : le haut est gardé, le milieu coupé avec une mention, les deux dernières lignes restent.
+- **Livraison bloquée par FLOW lui-même** : la feuille de route et le journal changent pendant le travail ; FLOW les commite (« flow: état du workflow ») avant de livrer, sinon Git refusait la fusion.
 - **Dossier vide** : « C commit » ne faisait rien (Git refuse un commit vide) ; il crée maintenant un premier commit vide.
 - **Tri sur un projet neuf** : plus de 17 « références mortes » pour des étapes pas encore faites (elles citent des documents qu'elles créeront).
 

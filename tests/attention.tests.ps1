@@ -95,3 +95,19 @@ Describe 'Attente animée' {
         $er.Count | Should -Be 0
     }
 }
+
+Describe 'Écran plus haut que la fenêtre' {
+    It 'on garde le haut et les deux dernières lignes (touches et message), le milieu est coupé' {
+        $lines = @(1..60 | ForEach-Object { "ligne $_" })
+        $r = @(Fit-Height $lines 30)
+        $r.Count | Should -Be 29
+        $r[0] | Should -Be 'ligne 1'
+        $r[-1] | Should -Be 'ligne 60'
+        $r[-2] | Should -Be 'ligne 59'
+        (($r | Where-Object { $_ -like '*écran trop haut*' }).Count) | Should -Be 1
+    }
+    It 'un écran qui tient n''est pas modifié' {
+        $lines = @(1..10 | ForEach-Object { "ligne $_" })
+        @(Fit-Height $lines 30).Count | Should -Be 10
+    }
+}
