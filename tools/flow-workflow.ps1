@@ -317,6 +317,22 @@ function Show-WorkflowDraft([string]$msg) {
     Show-Frame $L
 }
 
+function Suggest-Check([string]$cahierText) {
+    # la vérification automatique que le cahier annonce (« tests Pester », « pytest »…) ; $null si le profil en a déjà une ou si rien n'est reconnu
+    if (-not $Cfg -or @($Cfg.checks | Where-Object { $_ -and $_.cmd }).Count) { return $null }
+    $t = "$cahierText"
+    foreach ($r in @(
+            @{ p = '\bPester\b|Invoke-Pester'; name = 'tests Pester'; cmd = 'pwsh -NoProfile -Command "Invoke-Pester -CI"' },
+            @{ p = '\bpytest\b'; name = 'tests pytest'; cmd = 'pytest' },
+            @{ p = '\bvitest\b|\bjest\b|npm (run )?test'; name = 'tests npm'; cmd = 'npm test' },
+            @{ p = 'dotnet test'; name = 'tests dotnet'; cmd = 'dotnet test' },
+            @{ p = 'cargo test'; name = 'tests cargo'; cmd = 'cargo test' },
+            @{ p = 'go test'; name = 'tests go'; cmd = 'go test ./...' })) {
+        if ($t -match $r.p) { return [pscustomobject]@{ name = $r.name; cmd = $r.cmd } }
+    }
+    $null
+}
+
 function Invoke-WorkflowCreation {
     # étudie le projet, pose ses questions, écrit un brouillon, le fait valider. Renvoie un message pour l'écran appelant.
     param([switch]$Redo)
@@ -365,7 +381,15 @@ function Invoke-WorkflowCreation {
                     $kh = Message-Screen '⚑ HOOKS — faire vivre le workflow' (@("Les hooks de Claude Code peuvent enrichir ce projet pendant que tu travailles :", '') + @(Hooks-Summary-Lines) + @('', "$Dm Ils agissent dans toutes les sessions Claude de ce dossier. Rien n'est écrit dans la mémoire sans examen ; tes autres réglages ne sont jamais touchés.$R")) @('Entrée', 'activer', 'Échap', 'plus tard (H dans le profil)')
                     if ($kh.Key -eq 'Enter') { $he = @(Set-ProjectHooks $true); $hk = if ($he.Count) { " $Err✗ hooks : $($he[0])$R" } else { " $Ok✓ hooks activés$R" } }
                 } elseif ($Cfg -and $Cfg.hooks -eq $true) { [void](Sync-Hooks) }
-                return "$Ok✓ workflow validé : $(Wf-Dir) — à commiter pour le partager avec le projet$R$hk"
+                # vérification automatique annoncée par le cahier mais pas encore déclarée dans le profil
+                $ck = ''
+                $sg = Suggest-Check (Get-Content -LiteralPath (Wf-File 'CAHIER.md') -Raw -Encoding utf8)
+                if ($sg) {
+                    Cls
+                    $kc = Message-Screen '⚑ VÉRIFICATION — ajouter les tests au profil ?' @("Le cahier annonce des tests automatiques, mais le profil du projet n'a aucune vérification :", '', "  $B$($sg.name)$R $Dm→$R $($sg.cmd)", '', "$Dm Sans elle, le juge ne peut rien prouver et l'équipe ne sait pas si le travail marche.$R", "$Dm Lancée sur la branche d'intégration avant chaque livraison. Modifiable plus tard (profil du projet).$R") @('Entrée', 'ajouter', 'Échap', 'non')
+                    if ($kc.Key -eq 'Enter') { $Cfg.checks = @($Cfg.checks) + @($sg); Save-ProjectConfig; $ck = " $Ok✓ vérification ajoutée : $($sg.name)$R" }
+                }
+                return "$Ok✓ workflow validé : $(Wf-Dir) — à commiter pour le partager avec le projet$R$hk$ck"
             }
             elseif ($k.Key -eq 'Escape') { return "$Warn workflow gardé en brouillon (non validé, donc pas encore transmis aux Claude) : W pour le reprendre$R" }
             elseif ($ch -eq 'e') {

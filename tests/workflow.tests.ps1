@@ -457,3 +457,21 @@ Describe 'Réglages d''équipe par passe' {
         (Get-Content (Wf-File 'journal.md') -Raw -Encoding utf8) | Should -Match 'relecture croisée désactivée pour la passe complète'
     }
 }
+Describe 'Vérification proposée d''après le cahier' {
+    BeforeEach { [void](New-Project) }
+    It 'cahier qui parle de Pester, profil sans vérification : la commande Pester 5 est proposée' {
+        $s = Suggest-Check "## Règles décidées`n- Langage : PowerShell avec des tests Pester."
+        $s.name | Should -Be 'tests Pester'
+        $s.cmd | Should -Match 'Invoke-Pester -CI'
+    }
+    It 'autres outils reconnus' {
+        (Suggest-Check 'tests avec pytest').cmd | Should -Be 'pytest'
+        (Suggest-Check 'lancer npm test avant chaque livraison').cmd | Should -Be 'npm test'
+        (Suggest-Check 'dotnet test').cmd | Should -Be 'dotnet test'
+    }
+    It 'rien de reconnu, ou une vérification déjà déclarée : aucune proposition' {
+        Suggest-Check 'projet sans rien de particulier' | Should -BeNullOrEmpty
+        $global:Cfg.checks = @([pscustomobject]@{ name = 'x'; cmd = 'echo' })
+        Suggest-Check 'des tests Pester' | Should -BeNullOrEmpty
+    }
+}

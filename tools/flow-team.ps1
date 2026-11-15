@@ -314,6 +314,9 @@ function Exclude-Flow {
     $cur = if (Test-Path -LiteralPath $ex) { Get-Content -LiteralPath $ex -Raw } else { '' }
     if ($cur -match '(?m)^\.flow/\s*$') { $cur = $cur -replace '(?m)^\.flow/\s*$', '.flow/runs/'; Set-Content -LiteralPath $ex $cur -NoNewline }
     elseif ($cur -notmatch '(?m)^\.flow/runs/') { Add-Content -LiteralPath $ex "`n.flow/runs/" }
+    # les copies de sauvegarde (.bak) de FLOW ne sont pas du projet
+    $cur2 = Get-Content -LiteralPath $ex -Raw
+    if ($cur2 -notmatch '(?m)^\.flow/\*\*/\*\.bak') { Add-Content -LiteralPath $ex "`n.flow/**/*.bak" }
 }
 
 # ───────────────────────── profil du projet (.flow\config.json) ─────────────────────────
@@ -781,8 +784,13 @@ function Ask-Questions($qs, [string]$title, [string]$intro = '') {
         $zones = @()
         for ($j = 0; $j -lt $opts.Count; $j++) {
             $mark = if ($j -eq $sel) { "$(PalC 0.1)$B▸$R" } else { ' ' }
-            $zones += @{ Y = $L.Count; Row = $j }
-            $L.Add("  $mark $B$($j + 1)$R  $($opts[$j])$(if ($j -eq 0) { "  $Ok(recommandé)$R" })")
+            # une option longue passe à la ligne (retrait sous le texte) au lieu d'être coupée par une fenêtre étroite
+            $y0 = $L.Count
+            $oc = @(Chunks "$($opts[$j])" ($W - 9)); if (-not $oc.Count) { $oc = @('') }
+            for ($ci = 0; $ci -lt $oc.Count; $ci++) {
+                $L.Add($(if ($ci -eq 0) { "  $mark $B$($j + 1)$R  $($oc[$ci])$(if ($j -eq 0 -and $oc.Count -eq 1) { "  $Ok(recommandé)$R" })" } else { "       $($oc[$ci])$(if ($j -eq 0 -and $ci -eq $oc.Count - 1) { "  $Ok(recommandé)$R" })" }))
+            }
+            $zones += @{ Y = $y0; Y2 = ($L.Count - 1); Row = $j }
         }
         $L.Add('')
         if ($ans[$i]) { $L.Add("  $Dm réponse déjà donnée : $($ans[$i].a)$R") }
@@ -790,7 +798,7 @@ function Ask-Questions($qs, [string]$title, [string]$intro = '') {
         $L.Add('')
         $L.Add((Keys @('↑↓ ou 1-4', 'choisir', 'Entrée', 'valider', 'T', 'mes mots', 'S', 'décide', '←', 'précédente', 'Échap', 'passer')))
         Show-Frame $L
-        foreach ($zn in $zones) { Add-Zone $zn.Y $zn.Y 0 999 @{ Row = $zn.Row } }
+        foreach ($zn in $zones) { Add-Zone $zn.Y $zn.Y2 0 999 @{ Row = $zn.Row } }
         $act = Read-Action -Wait
         if ($act.Click) { $sel = $act.Click.Row; if (-not $act.Double) { continue }; $k = Fake-Key 'Enter' } else { $k = $act.K }
         if (-not $k) { continue }
@@ -2533,18 +2541,46 @@ function Project-Checks {
     @($Cfg.checks | Where-Object { $_ -and $_.cmd })
 }
 
+# ───────────────────────── Pester 5 portable pour les vérifications ─────────────────────────
+# Windows ne fournit que Pester 3.4 : « Invoke-Pester -CI » (Pester 5) échoue alors sans rien expliquer. Si une vérification du projet
+# lance Pester et que la machine n'a que l'ancien, FLOW récupère Pester 5 UNE FOIS dans %LOCALAPPDATA%\FLOW\modules (rien n'est
+# installé sur la machine) et le met en tête du chemin des modules pour cette vérification seulement.
+function Pester-Dir { if ($global:FlowModulesDir) { $global:FlowModulesDir } else { Join-Path $env:LOCALAPPDATA 'FLOW\modules' } }
+function Pester-Max([string]$root) {
+    # plus haute version de Pester ≥ 5 trouvée sous $root\Pester\<version>\ ; $null si aucune
+    $best = $null
+    foreach ($d in @(Get-ChildItem -LiteralPath (Join-Path $root 'Pester') -Directory -ErrorAction SilentlyContinue)) {
+        $v = $null; if ([version]::TryParse($d.Name, [ref]$v) -and $v.Major -ge 5 -and (Test-Path -LiteralPath (Join-Path $d.FullName 'Pester.psd1')) -and (-not $best -or $v -gt $best)) { $best = $v }
+    }
+    $best
+}
+function Pester-System { $m = @(Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version.Major -ge 5 }); [bool]$m.Count }
+function Save-PesterPortable([string]$dir) { New-Item -ItemType Directory -Force $dir | Out-Null; Save-Module -Name Pester -Path $dir -MinimumVersion 5.0 -MaximumVersion 5.99.99 -Force -ErrorAction Stop }
+function Pester-Prefix([string]$cmd) {
+    # texte à placer devant la commande de la vérification ('' si rien à faire)
+    if ($cmd -notmatch '\bInvoke-Pester\b') { return '' }
+    if (Pester-System) { return '' }
+    $dir = Pester-Dir
+    if (-not (Pester-Max $dir)) {
+        try { Save-PesterPortable $dir; Write-FlowLog "Pester 5 portable récupéré dans $dir (la machine n'avait que l'ancien Pester)" }
+        catch { Write-FlowLog "Pester 5 introuvable et non téléchargeable : $($_.Exception.Message)" 'WARN'; return '' }
+    }
+    if (-not (Pester-Max $dir)) { return '' }
+    "`$env:PSModulePath = '$($dir -replace "'", "''")' + ';' + `$env:PSModulePath; "
+}
+
 function Run-Checks([string]$dir) {
     # préparation de la copie puis chaque vérification, dans l'ordre ; résultat détaillé par vérification
     $checks = Project-Checks
     if (-not $checks.Count) { return @() }
     Prepare-Copy $dir
-    $spec = ConvertTo-Json -Compress -Depth 4 @(@($(if ($Cfg.setup) { [pscustomobject]@{ name = 'préparation'; cmd = [string]$Cfg.setup } })) + $checks | Where-Object { $_ })
+    $spec = ConvertTo-Json -Compress -Depth 4 @(@($(if ($Cfg.setup) { [pscustomobject]@{ name = 'préparation'; cmd = [string]$Cfg.setup; run = [string]$Cfg.setup } })) + @($checks | ForEach-Object { [pscustomobject]@{ name = $_.name; cmd = [string]$_.cmd; run = ((Pester-Prefix ([string]$_.cmd)) + [string]$_.cmd) } }) | Where-Object { $_ })
     $envPre = Git-Env
     $job = Start-Job -ScriptBlock {
         param($d, $spec, $envPre)
         $out = @()
         foreach ($c in ($spec | ConvertFrom-Json)) {
-            $o = & pwsh -NoProfile -Command "Set-Location -LiteralPath '$($d -replace "'", "''")'; $envPre$($c.cmd)" 2>&1 | Out-String
+            $o = & pwsh -NoProfile -Command "Set-Location -LiteralPath '$($d -replace "'", "''")'; $envPre$($c.run)" 2>&1 | Out-String
             $out += [pscustomobject]@{ name = $c.name; cmd = $c.cmd; code = $LASTEXITCODE; out = $o }
             if ($c.name -eq 'préparation' -and $LASTEXITCODE -ne 0) { break }
         }

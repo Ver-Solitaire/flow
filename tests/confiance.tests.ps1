@@ -69,3 +69,54 @@ Describe 'Un ouvrier qui pose une question attend l''utilisateur' {
         Claude-State $x.acct $x.wt | Should -Be 'working'
     }
 }
+Describe 'Pester 5 portable pour les vérifications du projet' {
+    BeforeEach {
+        $global:FlowModulesDir = Join-Path $global:Base ('mods-' + [guid]::NewGuid().ToString('N').Substring(0, 5))
+        $global:Saved = 0; $global:SystemOk = $false
+        function Pester-System { $global:SystemOk }
+        function Save-PesterPortable([string]$dir) { $global:Saved++; New-Item -ItemType Directory -Force (Join-Path $dir 'Pester\5.9.1') | Out-Null; Set-Content (Join-Path $dir 'Pester\5.9.1\Pester.psd1') '@{}' }
+    }
+    AfterEach { $global:FlowModulesDir = $null }
+    It 'une vérification qui ne lance pas Pester : rien à faire, rien de téléchargé' {
+        Pester-Prefix 'npm test' | Should -Be ''
+        $global:Saved | Should -Be 0
+    }
+    It 'Pester 5 déjà sur la machine : rien à faire' {
+        $global:SystemOk = $true
+        Pester-Prefix 'pwsh -NoProfile -Command "Invoke-Pester -CI"' | Should -Be ''
+        $global:Saved | Should -Be 0
+    }
+    It 'machine avec l''ancien Pester seulement : Pester 5 est récupéré UNE fois, puis réutilisé ; le chemin des modules est complété pour cette vérification' {
+        $p = Pester-Prefix 'pwsh -NoProfile -Command "Invoke-Pester -CI"'
+        $p | Should -Match 'PSModulePath'
+        $p | Should -Match ([regex]::Escape($global:FlowModulesDir))
+        $global:Saved | Should -Be 1
+        [void](Pester-Prefix 'Invoke-Pester')
+        $global:Saved | Should -Be 1
+    }
+    It 'téléchargement impossible : pas de préfixe, pas de plantage' {
+        function Save-PesterPortable([string]$dir) { throw 'hors ligne' }
+        { Pester-Prefix 'Invoke-Pester -CI' } | Should -Not -Throw
+        Pester-Prefix 'Invoke-Pester -CI' | Should -Be ''
+    }
+    It 'les versions 3 ou illisibles du dossier sont ignorées' {
+        New-Item -ItemType Directory -Force (Join-Path $global:FlowModulesDir 'Pester\3.4.0'), (Join-Path $global:FlowModulesDir 'Pester\abc') | Out-Null
+        Set-Content (Join-Path $global:FlowModulesDir 'Pester\3.4.0\Pester.psd1') '@{}'
+        Pester-Max $global:FlowModulesDir | Should -BeNullOrEmpty
+    }
+}
+Describe 'Questions : les options longues passent à la ligne' {
+    It 'dans une fenêtre étroite, une option longue est écrite en entier sur plusieurs lignes (rien n''est coupé)' {
+        $global:Frames = @()
+        function Show-Frame($lines) { $global:Frames += , @($lines) }
+        function ConW { 40 }
+        function Read-Action { param([switch]$Wait, [int]$TimeoutMs = 0, [switch]$Wheel) @{ K = [pscustomobject]@{ Key = 'Escape'; KeyChar = [char]27; Modifiers = 0 } } }
+        function Cls { }
+        $long = 'Un fichier JSON local, extensible, dont les anciennes versions restent toujours lisibles par les nouvelles'
+        $r = Ask-Questions @([pscustomobject]@{ question = 'Où stocker ?'; why = 'parce que'; options = @($long, 'Un fichier CSV') }) 'TEST'
+        $txt = (@($global:Frames[0]) | ForEach-Object { [regex]::Replace("$_", "\x1b\[[0-9;]*[A-Za-z]", '') }) -join ' '
+        $flat = ($txt -replace '\s+', ' ')
+        $flat | Should -Match 'anciennes versions restent toujours lisibles par les nouvelles'
+        $flat | Should -Match 'Un fichier CSV'
+    }
+}

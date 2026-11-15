@@ -4,6 +4,12 @@
 
 **Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1.
 
+### Défauts de l'audit corrigés (suite)
+- **Pester 3 sur la machine** : si une vérification du projet lance `Invoke-Pester` et que la machine n'a que l'ancien Pester, FLOW récupère Pester 5 une fois dans `%LOCALAPPDATA%\FLOW\modules` (rien n'est installé) et l'utilise pour cette vérification seulement.
+- **Vérification proposée** : à la validation du workflow, si le cahier annonce des tests (Pester, pytest, npm test, dotnet, cargo, go) et que le profil n'a aucune vérification, FLOW propose de l'ajouter (Entrée).
+- **Options de questions longues** : elles passent à la ligne au lieu d'être coupées dans une fenêtre étroite.
+- Les fichiers `.flow/**/*.bak` sont exclus de Git.
+
 ### Surveillance des ouvriers : plus de blocage silencieux
 - **FLOW lit l'écran de chaque ouvrier toutes les 2 secondes** et reconnaît : une question posée à l'utilisateur, une demande de permission, « faire confiance à ce dossier ? », une limite d'usage atteinte, un compte déconnecté, et un **silence prolongé** (écran inchangé depuis 8 minutes).
 - **Visible** : bannière animée « ⚑ À TOI — N ouvrier(s) bloqué(s) » avec alerte (notification, son, clignotement, rappel), la cause en rouge sur la ligne de l'ouvrier, le détail en dessous, et un journal `.flow\runs\<équipe>\attentes.md` (aussi un événement « blocage » dans la mémoire locale). Entrée sur l'ouvrier ouvre son Claude pour répondre.
