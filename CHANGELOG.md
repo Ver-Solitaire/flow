@@ -4,6 +4,12 @@
 
 **Essayé avec** : PowerShell 7.7.0 · psmux 3.4.0 · Claude Code 2.1.318 · Git 2.56.0 · Pester 5.9.1.
 
+### Surveillance des ouvriers : plus de blocage silencieux
+- **FLOW lit l'écran de chaque ouvrier toutes les 2 secondes** et reconnaît : une question posée à l'utilisateur, une demande de permission, « faire confiance à ce dossier ? », une limite d'usage atteinte, un compte déconnecté, et un **silence prolongé** (écran inchangé depuis 8 minutes).
+- **Visible** : bannière animée « ⚑ À TOI — N ouvrier(s) bloqué(s) » avec alerte (notification, son, clignotement, rappel), la cause en rouge sur la ligne de l'ouvrier, le détail en dessous, et un journal `.flow\runs\<équipe>\attentes.md` (aussi un événement « blocage » dans la mémoire locale). Entrée sur l'ouvrier ouvre son Claude pour répondre.
+- **Réglé tout seul, sans risque** : la confiance dans la copie de travail créée par FLOW. Une permission ou une question n'est **jamais** acceptée à ta place.
+- Un ouvrier qui pose une question (AskUserQuestion) est maintenant bien compté comme « attend ta réponse » (il apparaissait « travaille »).
+
 ### Audit d'un projet neuf (budget-cli)
 - **Ouvriers bloqués sur « Do you trust this folder ? »** : sur un projet neuf, Claude Code pose cette question dans chaque nouvelle copie de travail et les ouvriers attendaient indéfiniment (35 minutes constatées). FLOW répond maintenant lui-même « Yes, I trust this folder », uniquement pour la copie qu'il vient de créer pour l'équipe (le texte de l'écran doit nommer cette copie).
 - **Dossier vide** : « C commit » ne faisait rien (Git refuse un commit vide) ; il crée maintenant un premier commit vide.

@@ -186,6 +186,7 @@ $GitExe = Find-Git
 . (Join-Path $PSScriptRoot 'flow-hooks.ps1')    # hooks de Claude Code dans le projet : installation, candidats
 . (Join-Path $PSScriptRoot 'flow-steps.ps1')    # étapes de la feuille de route : conception (spec), construction, enchaînement
 . (Join-Path $PSScriptRoot 'flow-curation.ps1') # tri : références mortes, doublons, contradictions, skills
+. (Join-Path $PSScriptRoot 'flow-watch.ps1')    # surveillance des ouvriers : blocages, questions, permissions, silence
 $global:FlowLogFile = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\config\flow.log'))
 $GitId = @()
 $GitCode = 0
@@ -1265,7 +1266,12 @@ function Claude-State($acct, [string]$dir) {
     for ($i = $lines.Count - 1; $i -ge 0; $i--) {
         $o = $null; try { $o = $lines[$i] | ConvertFrom-Json -Depth 64 -ErrorAction Stop } catch { continue }
         if ($o.isSidechain) { continue }
-        if ($o.type -eq 'assistant') { if ($o.message.stop_reason -eq 'end_turn') { return 'waiting' } else { return 'working' } }
+        if ($o.type -eq 'assistant') {
+            if ($o.message.stop_reason -eq 'end_turn') { return 'waiting' }
+            # une question posée à l'utilisateur (AskUserQuestion) sans réponse : l'ouvrier attend lui aussi
+            if (@(@($o.message.content) | Where-Object { $_.type -eq 'tool_use' -and $_.name -eq 'AskUserQuestion' }).Count) { return 'waiting' }
+            return 'working'
+        }
         if ($o.type -eq 'user') { return 'working' }
     }
     'starting'
@@ -2350,7 +2356,7 @@ function Mode-Run {
                     } elseif ($Psmux -and -not (Find-Pane $t.id)) {
                         $t.live = 'closed'
                     } else {
-                        [void](Accept-TrustPrompt $t)
+                        [void](Watch-Worker $t)
                         $t.live = Claude-State (Acct-ById $t.account) $t.worktree
                         if ($t.live -ne $prevLive[$t.id] -and $Psmux) {
                             switch ($t.live) {
@@ -2362,6 +2368,7 @@ function Mode-Run {
                     }
                 }
                 $prevLive[$t.id] = $t.live
+                if ($t.status -ne 'running' -and $script:Blockers.ContainsKey($t.id)) { $script:Blockers.Remove($t.id) }
                 if ($t.status -in 'running', 'done') { $commits[$t.id] = Commits-Of $t }
                 # annonce écrite par l'ouvrier : relayée aux autres ouvriers au travail
                 if ($t.status -in 'running', 'done' -and (Test-Path -LiteralPath (Announce-File $t.id))) {
@@ -2402,7 +2409,8 @@ function Mode-Run {
         $L.Add(''); $L.Add("  $(Grad '⚑ ÉQUIPE — au travail' ($script:Tick * 0.01))   $Dm$($State.id)$R")
         $L.Add("  $B$($State.summary)$R"); $L.Add((Stepper 3))
         $waiting = @($ts | Where-Object { $_.live -eq 'waiting' })
-        $L.Add($(if ($waiting.Count) { Now "$($waiting.id -join ', ') attend(ent) ta réponse : choisis-la avec ↑↓ puis Entrée pour voir son Claude et lui répondre" } else { "  $Dm▶ Rien à faire : les Claude travaillent. Tu peux suivre ou fermer, ça continue.$R" }))
+        $blk = @(Blockers-Summary)
+        $L.Add($(if ($blk.Count) { Attn "$($blk.Count) ouvrier(s) bloqué(s) : $(($blk | ForEach-Object { "$($_.Id) ($(Blocker-Label $_.Kind))" }) -join ', ') — choisis-le avec ↑↓ puis Entrée pour lui répondre" '⚑ FLOW : un ouvrier est bloqué' } elseif ($waiting.Count) { Now "$($waiting.id -join ', ') attend(ent) ta réponse : choisis-la avec ↑↓ puis Entrée pour voir son Claude et lui répondre" } else { "  $Dm▶ Rien à faire : les Claude travaillent. Tu peux suivre ou fermer, ça continue.$R" }))
         $L.Add("  $(Accounts-Line)"); $L.Add('')
         $runRows = @()
         for ($i = 0; $i -lt $ts.Count; $i++) {
@@ -2419,10 +2427,12 @@ function Mode-Run {
                         'working'  { "$Warn$($Spin[$script:Tick % 10]) travaille$R" }
                         'waiting'  { "$B$Teal✋ attend ta réponse$R" }
                         'closed'   { "$Err○ panneau fermé (L pour relancer)$R" }
+                        'blocked'  { "$Err🛑 bloqué$R" }
                         default    { "$Dm… démarre$R" }
                     }
                 }
             }
+            if ($script:Blockers.ContainsKey($t.id)) { $st = "$B$Err🛑 $(Blocker-Label $script:Blockers[$t.id].Kind)$R" }
             $cm = if ($commits.ContainsKey($t.id)) { " $Dm$($commits[$t.id]) commit(s)$R" } else { '' }
             $adv = if ($AdvJobs.ContainsKey($t.id)) { "  $(RgbA @(200,140,255))◈ conseiller $($AdvJobs[$t.id].Model) $($Spin[$script:Tick % 10])$R" }
                    elseif ([int]$t.advice) { "  $Dm◈ conseillée ×$($t.advice)$R" } else { '' }
@@ -2433,6 +2443,7 @@ function Mode-Run {
         $t = $ts[$sel]
         foreach ($x in @(Chunks $t.goal ($W - 8)) | Select-Object -First 3) { $L.Add("    $Dm$x$R") }
         if ($t.worktree) { $L.Add("    $Dm dossier : $($t.worktree)$R") }
+        if ($script:Blockers.ContainsKey($t.id)) { $bk = $script:Blockers[$t.id]; foreach ($x in @(Chunks "🛑 $($bk.Text)" ($W - 8)) | Select-Object -First 3) { $L.Add("    $Err$x$R") }; $L.Add("    $Dm depuis $([int]((Get-Date) - $bk.Since).TotalMinutes) min · Entrée pour voir son Claude et lui répondre · journal : attentes.md$R") }
         $L.Add('')
         if ((Test-Path -LiteralPath (Review-File $t.id)) -and [int]$t.reviews) { $L.Add("    $Dm relecture(s) : $(Review-File $t.id)$R") }
         $L.Add("  $Dm relecture croisée : $(if ($State.crossReview) { "activée (au plus $MaxReviews par tâche)" } else { 'désactivée' }) · V pour changer · tableau partagé : TABLEAU.md$R")

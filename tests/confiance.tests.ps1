@@ -44,3 +44,28 @@ Describe 'Approbation du dossier de l''ouvrier' {
         $global:Psmux = $true
     }
 }
+
+Describe 'Un ouvrier qui pose une question attend l''utilisateur' {
+    BeforeAll {
+        function Fake-Transcript([string]$lastJson) {
+            $home1 = Join-Path $global:Base 'compte'; $wt = Join-Path $global:Base 'copie\A'
+            $pd = Join-Path (Join-Path $home1 'projects') (Proj-Key $wt); New-Item -ItemType Directory -Force $pd | Out-Null
+            Set-Content (Join-Path $pd 's.jsonl') $lastJson -Encoding utf8
+            @{ acct = [pscustomobject]@{ Home = $home1 }; wt = $wt }
+        }
+    }
+    It 'AskUserQuestion sans réponse : « waiting » (et donc la notification « attend ta réponse »)' {
+        $x = Fake-Transcript '{"type":"assistant","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","name":"AskUserQuestion","input":{}}]}}'
+        Claude-State $x.acct $x.wt | Should -Be 'waiting'
+    }
+    It 'un autre outil (Bash) en cours : « working »' {
+        $x = Fake-Transcript '{"type":"assistant","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","name":"Bash","input":{}}]}}'
+        Claude-State $x.acct $x.wt | Should -Be 'working'
+    }
+    It 'fin de tour : « waiting » ; réponse de l''utilisateur reçue : « working »' {
+        $x = Fake-Transcript '{"type":"assistant","message":{"stop_reason":"end_turn","content":[]}}'
+        Claude-State $x.acct $x.wt | Should -Be 'waiting'
+        $x = Fake-Transcript '{"type":"user","message":{"content":"ok"}}'
+        Claude-State $x.acct $x.wt | Should -Be 'working'
+    }
+}
